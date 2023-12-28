@@ -1,4 +1,21 @@
 #!/usr/bin/make -f
 
+export DEB_BUILD_MAINT_OPTIONS=hardening=+all
+
+SCONS_BUILD_FLAGS = --libdir=/usr/lib/$(DEB_HOST_MULTIARCH) --disable-openfec --enable-tests
+
+ifneq (,$(filter alpha hurd-amd64 hurd-i386 m68k sparc64 x32,$(DEB_HOST_ARCH)))
+SCONS_BUILD_FLAGS += --disable-libunwind
+endif
+
 %:
 	dh $@
+
+override_dh_auto_build:
+	scons ${SCONS_BUILD_FLAGS}
+
+override_dh_auto_test:
+	scons ${SCONS_BUILD_FLAGS} test/roc_core
+
+override_dh_auto_install:
+	scons ${SCONS_BUILD_FLAGS} install DESTDIR=debian/tmp

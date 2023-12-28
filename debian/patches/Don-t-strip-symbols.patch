@@ -1,0 +1,15 @@
+Description: Don't strip symbols, let dh_strip do its job.
+Author: Dylan Aïssi <daissi@debian.org>
+Forwarded: not-needed
+
+--- a/src/SConscript
++++ b/src/SConscript
+@@ -66,7 +66,7 @@
+     public_api_targets = []
+ 
+     if not GetOption('disable_shared'):
+-        should_strip = not GetOption('enable_debug') and libs_env.SupportsStripSharedLibrary()
++        should_strip = False
+ 
+         libroc_shared = libs_env.SharedLibrary(
+             'roc_unstripped' if should_strip else 'roc',
