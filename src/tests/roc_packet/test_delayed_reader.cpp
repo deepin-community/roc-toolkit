@@ -1,0 +1,212 @@
+/*
+ * Copyright (c) 2015 Roc Streaming authors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
+#include <CppUTest/TestHarness.h>
+
+#include "roc_core/heap_arena.h"
+#include "roc_core/macro_helpers.h"
+#include "roc_packet/delayed_reader.h"
+#include "roc_packet/packet_factory.h"
+#include "roc_packet/queue.h"
+#include "roc_pipeline/config.h"
+#include "roc_status/status_code.h"
+
+namespace roc {
+namespace packet {
+
+namespace {
+
+enum { SampleRate = 1000, NumSamples = 100, NumPackets = 30 };
+
+const core::nanoseconds_t NsPerSample = core::Second / SampleRate;
+const audio::SampleSpec SampleSpecs(SampleRate,
+                                    audio::ChanLayout_Surround,
+                                    audio::ChanOrder_Smpte,
+                                    audio::ChanMask_Surround_Stereo);
+
+core::HeapArena arena;
+PacketFactory packet_factory(arena);
+
+PacketPtr new_packet(seqnum_t sn) {
+    PacketPtr packet = packet_factory.new_packet();
+    CHECK(packet);
+
+    packet->add_flags(Packet::FlagRTP);
+    packet->rtp()->seqnum = sn;
+    packet->rtp()->stream_timestamp = stream_timestamp_t(sn * NumSamples);
+
+    return packet;
+}
+
+class StatusReader : public IReader {
+public:
+    explicit StatusReader(status::StatusCode code)
+        : code_(code) {
+    }
+
+    virtual ROC_ATTR_NODISCARD status::StatusCode read(PacketPtr&) {
+        return code_;
+    }
+
+private:
+    status::StatusCode code_;
+};
+
+} // namespace
+
+TEST_GROUP(delayed_reader) {};
+
+TEST(delayed_reader, failed_to_read_packet) {
+    const status::StatusCode codes[] = {
+        status::StatusUnknown,
+        status::StatusNoData,
+    };
+
+    for (size_t n = 0; n < ROC_ARRAY_SIZE(codes); ++n) {
+        StatusReader reader(codes[n]);
+        DelayedReader dr(reader, 0, SampleSpecs);
+
+        PacketPtr pp;
+        UNSIGNED_LONGS_EQUAL(codes[n], dr.read(pp));
+        CHECK(!pp);
+    }
+}
+
+TEST(delayed_reader, no_delay) {
+    Queue queue;
+    DelayedReader dr(queue, 0, SampleSpecs);
+
+    PacketPtr pp;
+    UNSIGNED_LONGS_EQUAL(status::StatusNoData, dr.read(pp));
+    CHECK(!pp);
+
+    for (seqnum_t n = 0; n < NumPackets; n++) {
+        PacketPtr wp = new_packet(n);
+        UNSIGNED_LONGS_EQUAL(status::StatusOK, queue.write(wp));
+
+        PacketPtr rp;
+        UNSIGNED_LONGS_EQUAL(status::StatusOK, dr.read(rp));
+        CHECK(wp == rp);
+    }
+}
+
+TEST(delayed_reader, delay) {
+    Queue queue;
+    DelayedReader dr(queue, NumSamples * (NumPackets - 1) * NsPerSample, SampleSpecs);
+
+    PacketPtr packets[NumPackets];
+
+    for (seqnum_t n = 0; n < NumPackets; n++) {
+        PacketPtr p;
+        UNSIGNED_LONGS_EQUAL(status::StatusNoData, dr.read(p));
+        CHECK(!p);
+
+        packets[n] = new_packet(n);
+        UNSIGNED_LONGS_EQUAL(status::StatusOK, queue.write(packets[n]));
+    }
+
+    for (seqnum_t n = 0; n < NumPackets; n++) {
+        PacketPtr p;
+        UNSIGNED_LONGS_EQUAL(status::StatusOK, dr.read(p));
+        CHECK(p == packets[n]);
+    }
+
+    PacketPtr pp;
+    UNSIGNED_LONGS_EQUAL(status::StatusNoData, dr.read(pp));
+    CHECK(!pp);
+
+    for (seqnum_t n = 0; n < NumPackets; n++) {
+        PacketPtr wp = new_packet(NumPackets + n);
+        UNSIGNED_LONGS_EQUAL(status::StatusOK, queue.write(wp));
+
+        PacketPtr rp;
+        UNSIGNED_LONGS_EQUAL(status::StatusOK, dr.read(rp));
+        CHECK(wp == rp);
+    }
+
+    UNSIGNED_LONGS_EQUAL(status::StatusNoData, dr.read(pp));
+    CHECK(!pp);
+}
+
+TEST(delayed_reader, instant) {
+    Queue queue;
+    DelayedReader dr(queue, NumSamples * (NumPackets - 1) * NsPerSample, SampleSpecs);
+
+    PacketPtr packets[NumPackets];
+
+    for (seqnum_t n = 0; n < NumPackets; n++) {
+        packets[n] = new_packet(n);
+        UNSIGNED_LONGS_EQUAL(status::StatusOK, queue.write(packets[n]));
+    }
+
+    for (seqnum_t n = 0; n < NumPackets; n++) {
+        PacketPtr p;
+        UNSIGNED_LONGS_EQUAL(status::StatusOK, dr.read(p));
+        CHECK(p == packets[n]);
+    }
+
+    PacketPtr pp;
+    UNSIGNED_LONGS_EQUAL(status::StatusNoData, dr.read(pp));
+    CHECK(!pp);
+}
+
+TEST(delayed_reader, trim) {
+    Queue queue;
+    DelayedReader dr(queue, NumSamples * (NumPackets - 1) * NsPerSample, SampleSpecs);
+
+    PacketPtr packets[NumPackets * 2];
+
+    for (seqnum_t n = 0; n < NumPackets * 2; n++) {
+        packets[n] = new_packet(n);
+        UNSIGNED_LONGS_EQUAL(status::StatusOK, queue.write(packets[n]));
+    }
+
+    for (seqnum_t n = NumPackets; n < NumPackets * 2; n++) {
+        PacketPtr p;
+        UNSIGNED_LONGS_EQUAL(status::StatusOK, dr.read(p));
+        CHECK(p == packets[n]);
+    }
+
+    PacketPtr pp;
+    UNSIGNED_LONGS_EQUAL(status::StatusNoData, dr.read(pp));
+    CHECK(!pp);
+}
+
+TEST(delayed_reader, late_duplicates) {
+    Queue queue;
+    DelayedReader dr(queue, NumSamples * (NumPackets - 1) * NsPerSample, SampleSpecs);
+
+    PacketPtr packets[NumPackets];
+
+    for (seqnum_t n = 0; n < NumPackets; n++) {
+        packets[n] = new_packet(n);
+        UNSIGNED_LONGS_EQUAL(status::StatusOK, queue.write(packets[n]));
+    }
+
+    for (seqnum_t n = 0; n < NumPackets; n++) {
+        PacketPtr p;
+        UNSIGNED_LONGS_EQUAL(status::StatusOK, dr.read(p));
+        CHECK(p == packets[n]);
+    }
+
+    for (seqnum_t n = 0; n < NumPackets; n++) {
+        PacketPtr wp = new_packet(n);
+        UNSIGNED_LONGS_EQUAL(status::StatusOK, queue.write(wp));
+
+        PacketPtr rp;
+        UNSIGNED_LONGS_EQUAL(status::StatusOK, dr.read(rp));
+        CHECK(wp == rp);
+    }
+
+    PacketPtr pp;
+    UNSIGNED_LONGS_EQUAL(status::StatusNoData, dr.read(pp));
+    CHECK(!pp);
+}
+
+} // namespace packet
+} // namespace roc
