@@ -8,16 +8,17 @@
 
 #include <CppUTest/TestHarness.h>
 
+#include "roc_audio/frame_factory.h"
 #include "roc_audio/iframe_decoder.h"
 #include "roc_audio/iframe_encoder.h"
 #include "roc_audio/packetizer.h"
 #include "roc_audio/pcm_decoder.h"
 #include "roc_audio/pcm_encoder.h"
-#include "roc_core/buffer_factory.h"
 #include "roc_core/heap_arena.h"
-#include "roc_packet/packet_factory.h"
 #include "roc_packet/queue.h"
 #include "roc_rtp/composer.h"
+#include "roc_rtp/identity.h"
+#include "roc_rtp/sequencer.h"
 
 namespace roc {
 namespace audio {
@@ -30,11 +31,11 @@ enum {
     SamplesPerPacket = 200,
     SampleRate = 1000,
 
-    MaxPackets = 100,
-    MaxBufSize = 4000,
-
     NumCh = 2,
     ChMask = 0x3,
+
+    MaxPackets = 100,
+    MaxBufSize = 4000,
 
     PayloadType = 123
 };
@@ -42,13 +43,15 @@ enum {
 const core::nanoseconds_t PacketDuration = SamplesPerPacket * core::Second / SampleRate;
 const core::nanoseconds_t Now = 1691499037871419405;
 
-const SampleSpec SampleSpecs(SampleRate, ChanLayout_Surround, ChanOrder_Smpte, ChMask);
-const PcmFormat PcmFmt(PcmCode_SInt16, PcmEndian_Big);
+const SampleSpec frame_spec(
+    SampleRate, Sample_RawFormat, ChanLayout_Surround, ChanOrder_Smpte, ChMask);
+
+const SampleSpec packet_spec(
+    SampleRate, PcmFormat_SInt16_Be, ChanLayout_Surround, ChanOrder_Smpte, ChMask);
 
 core::HeapArena arena;
-core::BufferFactory<sample_t> sample_buffer_factory(arena, MaxBufSize);
-core::BufferFactory<uint8_t> byte_buffer_factory(arena, MaxBufSize);
-packet::PacketFactory packet_factory(arena);
+packet::PacketFactory packet_factory(arena, MaxBufSize);
+FrameFactory frame_factory(arena, MaxBufSize * sizeof(sample_t));
 
 rtp::Composer rtp_composer(NULL);
 
@@ -70,7 +73,7 @@ public:
 
     void read(packet::IReader& reader, size_t n_samples) {
         packet::PacketPtr pp;
-        UNSIGNED_LONGS_EQUAL(status::StatusOK, reader.read(pp));
+        LONGS_EQUAL(status::StatusOK, reader.read(pp));
         CHECK(pp);
 
         UNSIGNED_LONGS_EQUAL(packet::Packet::FlagRTP | packet::Packet::FlagAudio
@@ -78,17 +81,19 @@ public:
                              pp->flags());
 
         if (pos_ == 0) {
-            src_ = pp->rtp()->source;
+            src_ = pp->rtp()->source_id;
             sn_ = pp->rtp()->seqnum;
             ts_ = pp->rtp()->stream_timestamp;
         } else {
-            UNSIGNED_LONGS_EQUAL(src_, pp->rtp()->source);
+            UNSIGNED_LONGS_EQUAL(src_, pp->rtp()->source_id);
             UNSIGNED_LONGS_EQUAL(sn_, pp->rtp()->seqnum);
             UNSIGNED_LONGS_EQUAL(ts_, pp->rtp()->stream_timestamp);
         }
         CHECK(core::ns_equal_delta(pp->rtp()->capture_timestamp, capture_ts_,
                                    core::Microsecond));
-        capture_ts_ += SampleSpecs.samples_per_chan_2_ns(n_samples);
+        if (capture_ts_) {
+            capture_ts_ += frame_spec.samples_per_chan_2_ns(n_samples);
+        }
         UNSIGNED_LONGS_EQUAL(n_samples, pp->rtp()->duration);
         UNSIGNED_LONGS_EQUAL(PayloadType, pp->rtp()->payload_type);
 
@@ -100,7 +105,7 @@ public:
 
         sample_t samples[SamplesPerPacket * NumCh] = {};
 
-        UNSIGNED_LONGS_EQUAL(n_samples, payload_decoder_.read(samples, SamplesPerPacket));
+        LONGS_EQUAL(n_samples, payload_decoder_.read(samples, SamplesPerPacket));
 
         payload_decoder_.end();
 
@@ -140,7 +145,7 @@ public:
     }
 
     void write(IFrameWriter& writer, size_t num_samples) {
-        core::Slice<sample_t> buf = sample_buffer_factory.new_buffer();
+        core::Slice<sample_t> buf = frame_factory.new_raw_buffer();
         CHECK(buf);
 
         buf.reslice(0, num_samples * NumCh);
@@ -154,7 +159,9 @@ public:
 
         Frame frame(buf.data(), buf.size());
         frame.set_capture_timestamp(capture_ts_);
-        capture_ts_ += SampleSpecs.samples_per_chan_2_ns(num_samples);
+        if (capture_ts_) {
+            capture_ts_ += frame_spec.samples_per_chan_2_ns(num_samples);
+        }
         writer.write(frame);
     }
 
@@ -170,13 +177,15 @@ TEST_GROUP(packetizer) {};
 TEST(packetizer, one_buffer_one_packet) {
     enum { NumFrames = 10 };
 
-    PcmEncoder encoder(PcmFmt, SampleSpecs);
-    PcmDecoder decoder(PcmFmt, SampleSpecs);
+    PcmEncoder encoder(packet_spec);
+    PcmDecoder decoder(packet_spec);
 
     packet::Queue packet_queue;
 
-    Packetizer packetizer(packet_queue, rtp_composer, encoder, packet_factory,
-                          byte_buffer_factory, PacketDuration, SampleSpecs, PayloadType);
+    rtp::Identity identity;
+    rtp::Sequencer sequencer(identity, PayloadType);
+    Packetizer packetizer(packet_queue, rtp_composer, sequencer, encoder, packet_factory,
+                          PacketDuration, frame_spec);
 
     FrameMaker frame_maker;
     PacketChecker packet_checker(decoder);
@@ -195,13 +204,15 @@ TEST(packetizer, one_buffer_one_packet) {
 TEST(packetizer, one_buffer_multiple_packets) {
     enum { NumPackets = 10 };
 
-    PcmEncoder encoder(PcmFmt, SampleSpecs);
-    PcmDecoder decoder(PcmFmt, SampleSpecs);
+    PcmEncoder encoder(packet_spec);
+    PcmDecoder decoder(packet_spec);
 
     packet::Queue packet_queue;
 
-    Packetizer packetizer(packet_queue, rtp_composer, encoder, packet_factory,
-                          byte_buffer_factory, PacketDuration, SampleSpecs, PayloadType);
+    rtp::Identity identity;
+    rtp::Sequencer sequencer(identity, PayloadType);
+    Packetizer packetizer(packet_queue, rtp_composer, sequencer, encoder, packet_factory,
+                          PacketDuration, frame_spec);
 
     FrameMaker frame_maker;
     PacketChecker packet_checker(decoder);
@@ -220,13 +231,15 @@ TEST(packetizer, multiple_buffers_one_packet) {
 
     CHECK(SamplesPerPacket % FramesPerPacket == 0);
 
-    PcmEncoder encoder(PcmFmt, SampleSpecs);
-    PcmDecoder decoder(PcmFmt, SampleSpecs);
+    PcmEncoder encoder(packet_spec);
+    PcmDecoder decoder(packet_spec);
 
     packet::Queue packet_queue;
 
-    Packetizer packetizer(packet_queue, rtp_composer, encoder, packet_factory,
-                          byte_buffer_factory, PacketDuration, SampleSpecs, PayloadType);
+    rtp::Identity identity;
+    rtp::Sequencer sequencer(identity, PayloadType);
+    Packetizer packetizer(packet_queue, rtp_composer, sequencer, encoder, packet_factory,
+                          PacketDuration, frame_spec);
 
     FrameMaker frame_maker;
     PacketChecker packet_checker(decoder);
@@ -251,13 +264,15 @@ TEST(packetizer, multiple_buffers_multiple_packets) {
         NumPackets = (NumSamples * NumFrames / SamplesPerPacket)
     };
 
-    PcmEncoder encoder(PcmFmt, SampleSpecs);
-    PcmDecoder decoder(PcmFmt, SampleSpecs);
+    PcmEncoder encoder(packet_spec);
+    PcmDecoder decoder(packet_spec);
 
     packet::Queue packet_queue;
 
-    Packetizer packetizer(packet_queue, rtp_composer, encoder, packet_factory,
-                          byte_buffer_factory, PacketDuration, SampleSpecs, PayloadType);
+    rtp::Identity identity;
+    rtp::Sequencer sequencer(identity, PayloadType);
+    Packetizer packetizer(packet_queue, rtp_composer, sequencer, encoder, packet_factory,
+                          PacketDuration, frame_spec);
 
     FrameMaker frame_maker;
     PacketChecker packet_checker(decoder);
@@ -276,13 +291,15 @@ TEST(packetizer, multiple_buffers_multiple_packets) {
 TEST(packetizer, flush) {
     enum { NumIterations = 5, Missing = 10 };
 
-    PcmEncoder encoder(PcmFmt, SampleSpecs);
-    PcmDecoder decoder(PcmFmt, SampleSpecs);
+    PcmEncoder encoder(packet_spec);
+    PcmDecoder decoder(packet_spec);
 
     packet::Queue packet_queue;
 
-    Packetizer packetizer(packet_queue, rtp_composer, encoder, packet_factory,
-                          byte_buffer_factory, PacketDuration, SampleSpecs, PayloadType);
+    rtp::Identity identity;
+    rtp::Sequencer sequencer(identity, PayloadType);
+    Packetizer packetizer(packet_queue, rtp_composer, sequencer, encoder, packet_factory,
+                          PacketDuration, frame_spec);
 
     FrameMaker frame_maker;
     PacketChecker packet_checker(decoder);
@@ -302,6 +319,63 @@ TEST(packetizer, flush) {
         packet_checker.read(packet_queue, SamplesPerPacket - Missing);
 
         UNSIGNED_LONGS_EQUAL(0, packet_queue.size());
+    }
+}
+
+TEST(packetizer, timestamp_zero_cts) {
+    enum {
+        NumFrames = 10,
+        NumSamples = (SamplesPerPacket - 1),
+        NumPackets = (NumSamples * NumFrames / SamplesPerPacket)
+    };
+
+    PcmEncoder encoder(packet_spec);
+    PcmDecoder decoder(packet_spec);
+
+    packet::Queue packet_queue;
+
+    rtp::Identity identity;
+    rtp::Sequencer sequencer(identity, PayloadType);
+    Packetizer packetizer(packet_queue, rtp_composer, sequencer, encoder, packet_factory,
+                          PacketDuration, frame_spec);
+
+    const core::nanoseconds_t zero_cts = 0;
+
+    FrameMaker frame_maker(zero_cts);
+    PacketChecker packet_checker(decoder, zero_cts);
+
+    for (size_t fn = 0; fn < NumFrames; fn++) {
+        frame_maker.write(packetizer, NumSamples);
+    }
+
+    for (size_t pn = 0; pn < NumPackets; pn++) {
+        packet_checker.read(packet_queue, SamplesPerPacket);
+    }
+
+    UNSIGNED_LONGS_EQUAL(0, packet_queue.size());
+}
+
+TEST(packetizer, metrics) {
+    enum { NumPackets = 10 };
+
+    PcmEncoder encoder(packet_spec);
+    packet::Queue packet_queue;
+
+    rtp::Identity identity;
+    rtp::Sequencer sequencer(identity, PayloadType);
+    Packetizer packetizer(packet_queue, rtp_composer, sequencer, encoder, packet_factory,
+                          PacketDuration, frame_spec);
+
+    FrameMaker frame_maker;
+
+    for (size_t pn = 0; pn < NumPackets; pn++) {
+        frame_maker.write(packetizer, SamplesPerPacket);
+
+        const PacketizerMetrics metrics = packetizer.metrics();
+
+        UNSIGNED_LONGS_EQUAL(pn + 1, metrics.packet_count);
+        UNSIGNED_LONGS_EQUAL((pn + 1) * SamplesPerPacket * NumCh * sizeof(int16_t),
+                             metrics.payload_count);
     }
 }
 

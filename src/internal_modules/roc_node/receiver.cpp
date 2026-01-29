@@ -8,28 +8,27 @@
 
 #include "roc_node/receiver.h"
 #include "roc_address/endpoint_uri_to_str.h"
-#include "roc_address/socket_addr.h"
 #include "roc_address/socket_addr_to_str.h"
 #include "roc_core/log.h"
-#include "roc_core/macro_helpers.h"
 #include "roc_core/panic.h"
 
 namespace roc {
 namespace node {
 
-Receiver::Receiver(Context& context, const pipeline::ReceiverConfig& pipeline_config)
+Receiver::Receiver(Context& context,
+                   const pipeline::ReceiverSourceConfig& pipeline_config)
     : Node(context)
     , pipeline_(*this,
                 pipeline_config,
-                context.format_map(),
-                context.packet_factory(),
-                context.byte_buffer_factory(),
-                context.sample_buffer_factory(),
+                context.encoding_map(),
+                context.packet_pool(),
+                context.packet_buffer_pool(),
+                context.frame_buffer_pool(),
                 context.arena())
     , processing_task_(pipeline_)
     , slot_pool_("slot_pool", context.arena())
     , slot_map_(context.arena())
-    , sess_metrics_(context.arena())
+    , party_metrics_(context.arena())
     , valid_(false) {
     roc_log(LogDebug, "receiver node: initializing");
 
@@ -63,7 +62,7 @@ bool Receiver::is_valid() {
 
 bool Receiver::configure(slot_index_t slot_index,
                          address::Interface iface,
-                         const netio::UdpReceiverConfig& config) {
+                         const netio::UdpConfig& config) {
     core::Mutex::Lock lock(mutex_);
 
     roc_panic_if_not(is_valid());
@@ -161,10 +160,11 @@ bool Receiver::bind(slot_index_t slot_index,
         return false;
     }
 
+    Port& port = slot->ports[iface];
+
     address::SocketAddr address;
 
     netio::NetworkLoop::Tasks::ResolveEndpointAddress resolve_task(uri);
-
     if (!context().network_loop().schedule_and_wait(resolve_task)) {
         roc_log(LogError,
                 "receiver node:"
@@ -175,22 +175,9 @@ bool Receiver::bind(slot_index_t slot_index,
         return false;
     }
 
-    pipeline::ReceiverLoop::Tasks::AddEndpoint endpoint_task(slot->handle, iface,
-                                                             uri.proto());
-    if (!pipeline_.schedule_and_wait(endpoint_task)) {
-        roc_log(LogError,
-                "receiver node:"
-                " can't bind %s interface of slot %lu:"
-                " can't add endpoint to pipeline",
-                address::interface_to_str(iface), (unsigned long)slot_index);
-        break_slot_(*slot);
-        return false;
-    }
+    port.config.bind_address = resolve_task.get_address();
 
-    slot->ports[iface].config.bind_address = resolve_task.get_address();
-
-    netio::NetworkLoop::Tasks::AddUdpReceiverPort port_task(slot->ports[iface].config,
-                                                            *endpoint_task.get_writer());
+    netio::NetworkLoop::Tasks::AddUdpPort port_task(port.config);
     if (!context().network_loop().schedule_and_wait(port_task)) {
         roc_log(LogError,
                 "receiver node:"
@@ -201,7 +188,48 @@ bool Receiver::bind(slot_index_t slot_index,
         return false;
     }
 
-    slot->ports[iface].handle = port_task.get_handle();
+    port.handle = port_task.get_handle();
+
+    packet::IWriter* outbound_writer = NULL;
+
+    if (iface == address::Iface_AudioControl) {
+        netio::NetworkLoop::Tasks::StartUdpSend send_task(port.handle);
+        if (!context().network_loop().schedule_and_wait(send_task)) {
+            roc_log(LogError,
+                    "receiver node:"
+                    " can't bind %s interface of slot %lu:"
+                    " can't start sending on local port",
+                    address::interface_to_str(iface), (unsigned long)slot_index);
+            break_slot_(*slot);
+            return false;
+        }
+
+        outbound_writer = &send_task.get_outbound_writer();
+    }
+
+    pipeline::ReceiverLoop::Tasks::AddEndpoint endpoint_task(
+        slot->handle, iface, uri.proto(), port.config.bind_address, outbound_writer);
+    if (!pipeline_.schedule_and_wait(endpoint_task)) {
+        roc_log(LogError,
+                "receiver node:"
+                " can't bind %s interface of slot %lu:"
+                " can't add endpoint to pipeline",
+                address::interface_to_str(iface), (unsigned long)slot_index);
+        break_slot_(*slot);
+        return false;
+    }
+
+    netio::NetworkLoop::Tasks::StartUdpRecv recv_task(
+        port.handle, *endpoint_task.get_inbound_writer());
+    if (!context().network_loop().schedule_and_wait(recv_task)) {
+        roc_log(LogError,
+                "receiver node:"
+                " can't bind %s interface of slot %lu:"
+                " can't start receiving on local port",
+                address::interface_to_str(iface), (unsigned long)slot_index);
+        break_slot_(*slot);
+        return false;
+    }
 
     if (uri.port() == 0) {
         // Report back the port number we've selected.
@@ -238,16 +266,17 @@ bool Receiver::unlink(slot_index_t slot_index) {
 }
 
 bool Receiver::get_metrics(slot_index_t slot_index,
-                           pipeline::ReceiverSlotMetrics& slot_metrics,
-                           sess_metrics_func_t sess_metrics_func,
-                           size_t* sess_metrics_size,
-                           void* sess_metrics_arg) {
+                           slot_metrics_func_t slot_metrics_func,
+                           void* slot_metrics_arg,
+                           party_metrics_func_t party_metrics_func,
+                           size_t* party_metrics_size,
+                           void* party_metrics_arg) {
     core::Mutex::Lock lock(mutex_);
 
     roc_panic_if_not(is_valid());
 
-    roc_panic_if(!sess_metrics_func);
-    roc_panic_if(!sess_metrics_size);
+    roc_panic_if(!slot_metrics_func);
+    roc_panic_if(!party_metrics_func);
 
     core::SharedPtr<Slot> slot = get_slot_(slot_index, false);
     if (!slot) {
@@ -258,16 +287,19 @@ bool Receiver::get_metrics(slot_index_t slot_index,
         return false;
     }
 
-    if (!sess_metrics_.resize(*sess_metrics_size)) {
-        roc_log(LogError,
-                "receiver node:"
-                " can't get metrics of slot %lu: can't allocate buffer",
-                (unsigned long)slot_index);
-        return false;
+    if (party_metrics_size) {
+        if (!party_metrics_.resize(*party_metrics_size)) {
+            roc_log(LogError,
+                    "receiver node:"
+                    " can't get metrics of slot %lu: can't allocate buffer",
+                    (unsigned long)slot_index);
+            return false;
+        }
     }
 
     pipeline::ReceiverLoop::Tasks::QuerySlot task(
-        slot->handle, slot_metrics, sess_metrics_.data(), sess_metrics_size);
+        slot->handle, slot_metrics_,
+        party_metrics_.size() != 0 ? party_metrics_.data() : NULL, party_metrics_size);
     if (!pipeline_.schedule_and_wait(task)) {
         roc_log(LogError,
                 "receiver node:"
@@ -276,8 +308,15 @@ bool Receiver::get_metrics(slot_index_t slot_index,
         return false;
     }
 
-    for (size_t sess_index = 0; sess_index < *sess_metrics_size; sess_index++) {
-        sess_metrics_func(sess_metrics_[sess_index], sess_index, sess_metrics_arg);
+    if (slot_metrics_arg) {
+        slot_metrics_func(slot_metrics_, slot_metrics_arg);
+    }
+
+    if (party_metrics_arg && party_metrics_size) {
+        for (size_t party_index = 0; party_index < *party_metrics_size; party_index++) {
+            party_metrics_func(party_metrics_[party_index], party_index,
+                               party_metrics_arg);
+        }
     }
 
     return true;
@@ -328,13 +367,16 @@ core::SharedPtr<Receiver::Slot> Receiver::get_slot_(slot_index_t slot_index,
 
     if (!slot) {
         if (auto_create) {
-            pipeline::ReceiverLoop::Tasks::CreateSlot task;
-            if (!pipeline_.schedule_and_wait(task)) {
+            pipeline::ReceiverSlotConfig slot_config;
+            slot_config.enable_routing = true;
+
+            pipeline::ReceiverLoop::Tasks::CreateSlot slot_task(slot_config);
+            if (!pipeline_.schedule_and_wait(slot_task)) {
                 roc_log(LogError, "receiver node: failed to create slot");
                 return NULL;
             }
 
-            slot = new (slot_pool_) Slot(slot_pool_, slot_index, task.get_handle());
+            slot = new (slot_pool_) Slot(slot_pool_, slot_index, slot_task.get_handle());
             if (!slot) {
                 roc_log(LogError, "receiver node: failed to create slot %lu",
                         (unsigned long)slot_index);

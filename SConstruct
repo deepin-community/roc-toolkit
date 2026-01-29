@@ -209,6 +209,11 @@ AddOption('--disable-sox',
           action='store_true',
           help='disable SoX support in tools')
 
+AddOption('--disable-sndfile',
+          dest='disable_sndfile',
+          action='store_true',
+          help='disable sndfile support in tools')
+
 AddOption('--disable-openssl',
           dest='disable_openssl',
           action='store_true',
@@ -444,7 +449,7 @@ if set(COMMAND_LINE_TARGETS) \
 meta = type('meta', (), {
     field: '' for field in ('build host toolchain platform variant thirdparty_variant '
                             'compiler compiler_ver '
-                            'c11_support fpic_support').split()})
+                            'c11_support gnu_toolchain').split()})
 
 # toolchain triple of the local system (where we're building), e.g. x86_64-pc-linux-gnu
 meta.build = GetOption('build')
@@ -489,7 +494,7 @@ else:
             meta.compiler = 'cc'
 
 if not meta.compiler:
-    env.Die("can't detect compiler name, please specify '--compiler={name}' manually, "
+    env.Die("can't detect compiler name, please specify '--compiler=<name>' manually, "
             "should be one of: {}", ', '.join(supported_compilers))
 
 if not meta.compiler in supported_compilers:
@@ -538,7 +543,7 @@ if not meta.build:
         meta.build = env.ParseConfigGuess(conf.env['CONFIG_GUESS'])
 
 if not meta.build:
-    env.Die(("can't detect system type, please specify '--build={type}' manually, "
+    env.Die(("can't detect system type, please specify '--build=<type>' manually, "
              "e.g. '--build=x86_64-pc-linux-gnu'"))
 
 if not meta.host:
@@ -561,13 +566,15 @@ if not meta.platform:
         meta.platform = 'linux'
     elif 'darwin' in meta.host:
         meta.platform = 'darwin'
+    elif 'gnu' in meta.host:
+        meta.platform = 'unix'
 
 if not meta.platform and meta.host == meta.build:
     if os.name == 'posix':
         meta.platform = 'unix'
 
 if not meta.platform:
-    env.Die("can't detect platform name, please specify '--platform={name}' manually, "
+    env.Die("can't detect platform name, please specify '--platform=<name>' manually, "
             "should be one of: {}", ', '.join(supported_platforms))
 
 if meta.platform not in supported_platforms:
@@ -644,11 +651,6 @@ if meta.platform == 'darwin':
     conf.FindTool('LIPO', [''], [('lipo', None)], required=False)
     conf.FindTool('INSTALL_NAME_TOOL', [''], [('install_name_tool', None)], required=False)
 
-if meta.compiler in ['gcc', 'clang']:
-    meta.fpic_support = True
-else:
-    meta.fpic_support = conf.CheckCompilerOptionSupported('-fPIC', 'cxx')
-
 meta.c11_support = False
 if not GetOption('disable_c11'):
     if meta.compiler == 'gcc':
@@ -657,6 +659,14 @@ if not GetOption('disable_c11'):
         meta.c11_support = meta.compiler_ver[:2] >= (7, 0)
     elif meta.compiler == 'clang' and meta.platform != 'darwin':
         meta.c11_support = meta.compiler_ver[:2] >= (3, 6)
+
+# true if we have full-featured GNU toolchain with all needed compiler and linker options
+# note that macOS is excluded
+meta.gnu_toolchain = False
+if meta.platform in ['linux', 'unix']:
+    meta.gnu_toolchain = 'gnu' in meta.host
+elif meta.platform in ['android']:
+    meta.gnu_toolchain = True
 
 conf.env['ROC_SYSTEM_BINDIR'] = GetOption('bindir')
 conf.env['ROC_SYSTEM_INCDIR'] = GetOption('incdir')
@@ -747,29 +757,30 @@ if GetOption('override_targets'):
     for t in GetOption('override_targets').split(','):
         env['ROC_TARGETS'] += ['target_' + t]
 else:
-    if meta.platform in ['linux', 'unix', 'darwin']:
+    if meta.platform in ['linux', 'darwin', 'unix']:
         env.Append(ROC_TARGETS=[
             'target_pc',
         ])
 
-    if meta.platform in ['linux', 'unix', 'darwin', 'android']:
+    if meta.platform in ['linux', 'android', 'darwin', 'unix']:
         env.Append(ROC_TARGETS=[
             'target_posix',
         ])
 
-    if meta.platform in ['linux', 'unix', 'darwin']:
+    if meta.platform in ['linux', 'darwin', 'unix']:
         env.Append(ROC_TARGETS=[
             'target_posix_pc',
         ])
 
-    if meta.platform in ['linux', 'unix', 'android']:
+    if meta.platform in ['linux', 'android', 'unix']:
         env.Append(ROC_TARGETS=[
             'target_posix_ext',
         ])
 
-    if (meta.platform in ['linux', 'unix'] and 'gnu' in meta.host) or \
-      meta.platform in ['android', 'darwin']:
+    if meta.platform in ['linux', 'android' 'darwin'] or meta.gnu_toolchain:
         env.Append(ROC_TARGETS=[
+            # GNU C++ Standard Library (libstdc++), or compatible, like
+            # LLVM C++ Standard Library (libc++)
             'target_gnu',
         ])
 
@@ -792,7 +803,7 @@ else:
             'target_libatomic_ops',
         ])
 
-    if meta.platform in ['linux', 'unix', 'darwin'] and not GetOption('disable_libunwind'):
+    if meta.platform in ['linux', 'darwin', 'unix'] and not GetOption('disable_libunwind'):
         env.Append(ROC_TARGETS=[
             'target_libunwind',
         ])
@@ -810,6 +821,10 @@ else:
         env.Append(ROC_TARGETS=[
             'target_openssl',
         ])
+    else:
+        env.Append(ROC_TARGETS=[
+            'target_nocsprng',
+        ])
 
     if not GetOption('disable_speexdsp'):
         env.Append(ROC_TARGETS=[
@@ -820,6 +835,10 @@ else:
         if not GetOption('disable_sox'):
             env.Append(ROC_TARGETS=[
                 'target_sox',
+            ])
+        if not GetOption('disable_sndfile'):
+            env.Append(ROC_TARGETS=[
+                'target_sndfile',
             ])
         if not GetOption('disable_alsa') and meta.platform in ['linux']:
             env.Append(ROC_TARGETS=[
@@ -859,7 +878,8 @@ env.Append(CPPDEFINES=[
     ('__STDC_LIMIT_MACROS', '1'),
 ])
 
-if 'target_posix' in env['ROC_TARGETS'] and meta.platform not in ['darwin', 'unix']:
+if 'target_posix' in env['ROC_TARGETS'] and meta.platform not in ['darwin']:
+    # macOS is special, otherwise rely on _POSIX_C_SOURCE
     env.Append(CPPDEFINES=[('_POSIX_C_SOURCE', env['ROC_POSIX_PLATFORM'])])
 
 if meta.platform in ['darwin']:
@@ -899,7 +919,7 @@ if meta.compiler in ['gcc', 'clang']:
     if meta.platform in ['linux', 'darwin']:
         env.AddManualDependency(libs=['pthread'])
 
-    if meta.platform in ['linux', 'android']:
+    if meta.platform in ['linux', 'android'] or meta.gnu_toolchain:
         if not GetOption('disable_soversion'):
             subenvs.public_libs['SHLIBSUFFIX'] = '{}.{}'.format(
                 subenvs.public_libs['SHLIBSUFFIX'], env['ROC_SOVER'])
@@ -975,11 +995,10 @@ if meta.compiler in ['cc']:
                 '-O3',
             ]})
 
-    if meta.fpic_support:
-        for var in ['CXXFLAGS', 'CFLAGS']:
-            conf.env.Append(**{var: [
-                '-fPIC',
-            ]})
+    for var in ['CXXFLAGS', 'CFLAGS']:
+        conf.env.Append(**{var: [
+            '-fPIC',
+        ]})
 
 if meta.compiler in ['gcc', 'clang']:
     if GetOption('enable_werror'):
@@ -1012,6 +1031,9 @@ if meta.compiler == 'gcc':
             '-Wno-shadow',
             '-Wno-stringop-overflow',
             '-Wno-system-headers',
+            '-Wno-unused-const-variable',
+            '-Wno-unused-function',
+            '-Wno-unused-parameter',
         ]})
 
     env.Append(CXXFLAGS=[
@@ -1061,6 +1083,9 @@ if meta.compiler == 'clang':
             '-Wno-psabi',
             '-Wno-shadow',
             '-Wno-system-headers',
+            '-Wno-unused-const-variable',
+            '-Wno-unused-function',
+            '-Wno-unused-parameter',
         ]})
 
     env.Append(CXXFLAGS=[
@@ -1085,8 +1110,15 @@ if sanitizers:
     if not meta.compiler in ['gcc', 'clang']:
         env.Die("sanitizers are not supported for compiler '{}'", meta.compiler)
 
-    for name in sanitizers:
-        flags = ['-fsanitize=' + name, '-fno-sanitize-recover=' + name]
+    enabled = sanitizers
+    disabled = ['vptr'] # disable due to false positives w/ virtual inheritance
+
+    for name in enabled + disabled:
+        if name in enabled:
+            flags = ['-fsanitize=' + name,
+                '-fno-sanitize-recover=' + name]
+        else:
+            flags = ['-fno-sanitize=' + name]
         env.AppendUnique(CFLAGS=flags)
         env.AppendUnique(CXXFLAGS=flags)
         env.AppendUnique(LINKFLAGS=flags)
@@ -1123,10 +1155,7 @@ if meta.compiler in ['gcc', 'clang']:
         for var in ['CC', 'CXX']:
             senv[var] = env.WrapClangDb(senv[var], env['ROC_BUILDDIR'])
 
-    compile_commands = '{}/compile_commands.json'.format(env['ROC_BUILDDIR'])
-
-    env.Artifact(compile_commands, '#src')
-    env.Install('#', compile_commands)
+    env['ROC_CLANGDB'] = '{}/compile_commands.json'.format(env['ROC_BUILDDIR'])
 
 # post-process paths after merging environments
 if meta.compiler in ['gcc', 'clang']:

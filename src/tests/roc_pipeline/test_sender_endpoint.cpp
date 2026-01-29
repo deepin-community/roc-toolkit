@@ -10,9 +10,13 @@
 
 #include "roc_address/protocol.h"
 #include "roc_core/heap_arena.h"
+#include "roc_core/noop_arena.h"
 #include "roc_packet/packet_factory.h"
 #include "roc_packet/queue.h"
 #include "roc_pipeline/sender_endpoint.h"
+#include "roc_pipeline/sender_session.h"
+#include "roc_pipeline/state_tracker.h"
+#include "roc_rtp/encoding_map.h"
 #include "roc_status/status_code.h"
 
 namespace roc {
@@ -20,14 +24,14 @@ namespace pipeline {
 
 namespace {
 
-struct NoMemArena : public core::IArena, public core::NonCopyable<> {
-    virtual void* allocate(size_t) {
-        return NULL;
-    }
+enum { PacketSz = 512 };
 
-    virtual void deallocate(void*) {
-    }
-};
+core::HeapArena arena;
+
+packet::PacketFactory packet_factory(arena, PacketSz);
+audio::FrameFactory frame_factory(arena, PacketSz * sizeof(audio::sample_t));
+
+rtp::EncodingMap encoding_map(arena);
 
 } // namespace
 
@@ -36,9 +40,14 @@ TEST_GROUP(sender_endpoint) {};
 TEST(sender_endpoint, valid) {
     address::SocketAddr addr;
     packet::Queue queue;
-    core::HeapArena arena;
 
-    SenderEndpoint endpoint(address::Proto_RTP, addr, queue, arena);
+    SenderSinkConfig sink_config;
+    StateTracker state_tracker;
+    SenderSession session(sink_config, encoding_map, packet_factory, frame_factory,
+                          arena);
+
+    SenderEndpoint endpoint(address::Proto_RTP, state_tracker, session, addr, queue,
+                            arena);
     CHECK(endpoint.is_valid());
 }
 
@@ -47,7 +56,13 @@ TEST(sender_endpoint, invalid_proto) {
     packet::Queue queue;
     core::HeapArena arena;
 
-    SenderEndpoint endpoint(address::Proto_None, addr, queue, arena);
+    SenderSinkConfig sink_config;
+    StateTracker state_tracker;
+    SenderSession session(sink_config, encoding_map, packet_factory, frame_factory,
+                          arena);
+
+    SenderEndpoint endpoint(address::Proto_None, state_tracker, session, addr, queue,
+                            arena);
     CHECK(!endpoint.is_valid());
 }
 
@@ -59,13 +74,17 @@ TEST(sender_endpoint, no_memory) {
         address::Proto_LDPC_Repair,
     };
 
-    NoMemArena nomem_arena;
-
     for (size_t n = 0; n < ROC_ARRAY_SIZE(protos); ++n) {
         address::SocketAddr addr;
         packet::Queue queue;
 
-        SenderEndpoint endpoint(protos[n], addr, queue, nomem_arena);
+        SenderSinkConfig sink_config;
+        StateTracker state_tracker;
+        SenderSession session(sink_config, encoding_map, packet_factory, frame_factory,
+                              arena);
+
+        SenderEndpoint endpoint(protos[n], state_tracker, session, addr, queue,
+                                core::NoopArena);
         CHECK(!endpoint.is_valid());
     }
 }

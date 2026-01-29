@@ -7,19 +7,18 @@
  */
 
 #include "roc_audio/pcm_decoder.h"
+#include "roc_audio/sample.h"
 #include "roc_core/panic.h"
 
 namespace roc {
 namespace audio {
 
-IFrameDecoder* PcmDecoder::construct(core::IArena& arena,
-                                     const PcmFormat& pcm_format,
-                                     const SampleSpec& sample_spec) {
-    return new (arena) PcmDecoder(pcm_format, sample_spec);
+IFrameDecoder* PcmDecoder::construct(core::IArena& arena, const SampleSpec& sample_spec) {
+    return new (arena) PcmDecoder(sample_spec);
 }
 
-PcmDecoder::PcmDecoder(const PcmFormat& pcm_format, const SampleSpec& sample_spec)
-    : pcm_mapper_(pcm_format, SampleFormat)
+PcmDecoder::PcmDecoder(const SampleSpec& sample_spec)
+    : pcm_mapper_(sample_spec.pcm_format(), Sample_RawFormat)
     , n_chans_(sample_spec.num_channels())
     , stream_pos_(0)
     , stream_avail_(0)
@@ -59,7 +58,7 @@ void PcmDecoder::begin(packet::stream_timestamp_t frame_position,
         packet::stream_timestamp_t(pcm_mapper_.input_sample_count(frame_size) / n_chans_);
 }
 
-size_t PcmDecoder::read(audio::sample_t* samples, size_t n_samples) {
+size_t PcmDecoder::read(sample_t* samples, size_t n_samples) {
     if (!frame_data_) {
         roc_panic("pcm decoder: read should be called only between begin/end");
     }

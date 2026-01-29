@@ -23,11 +23,21 @@ namespace {
 
 core::HeapArena arena;
 
+void write_slot_metrics(const pipeline::SenderSlotMetrics& slot_metrics, void* slot_arg) {
+    *(pipeline::SenderSlotMetrics*)slot_arg = slot_metrics;
+}
+
+void write_party_metrics(const pipeline::SenderParticipantMetrics& party_metrics,
+                         size_t party_index,
+                         void* party_arg) {
+    ((pipeline::SenderParticipantMetrics*)party_arg)[party_index] = party_metrics;
+}
+
 } // namespace
 
 TEST_GROUP(sender_encoder) {
     ContextConfig context_config;
-    pipeline::SenderConfig sender_config;
+    pipeline::SenderSinkConfig sender_config;
 };
 
 TEST(sender_encoder, sink) {
@@ -37,11 +47,11 @@ TEST(sender_encoder, sink) {
     SenderEncoder sender_encoder(context, sender_config);
     CHECK(sender_encoder.is_valid());
 
-    UNSIGNED_LONGS_EQUAL(sender_encoder.sink().sample_spec().sample_rate(),
-                         sender_config.input_sample_spec.sample_rate());
+    LONGS_EQUAL(sender_encoder.sink().sample_spec().sample_rate(),
+                sender_config.input_sample_spec.sample_rate());
 }
 
-TEST(sender_encoder, read) {
+TEST(sender_encoder, read_packet) {
     Context context(context_config, arena);
     CHECK(context.is_valid());
 
@@ -51,10 +61,33 @@ TEST(sender_encoder, read) {
     packet::PacketPtr pp;
 
     // TODO(gh-183): compare with StatusNotFound
-    UNSIGNED_LONGS_EQUAL(status::StatusNoData,
-                         sender_encoder.read(address::Iface_AudioSource, pp));
-    UNSIGNED_LONGS_EQUAL(status::StatusNoData,
-                         sender_encoder.read(address::Iface_AudioRepair, pp));
+    LONGS_EQUAL(status::StatusNoData,
+                sender_encoder.read_packet(address::Iface_AudioSource, pp));
+    CHECK(!pp);
+    LONGS_EQUAL(status::StatusNoData,
+                sender_encoder.read_packet(address::Iface_AudioRepair, pp));
+    CHECK(!pp);
+    LONGS_EQUAL(status::StatusNoData,
+                sender_encoder.read_packet(address::Iface_AudioControl, pp));
+    CHECK(!pp);
+}
+
+TEST(sender_encoder, write_packet) {
+    Context context(context_config, arena);
+    CHECK(context.is_valid());
+
+    SenderEncoder sender_encoder(context, sender_config);
+    CHECK(sender_encoder.is_valid());
+
+    packet::PacketPtr pp;
+
+    // TODO(gh-183): compare with StatusNotFound
+    LONGS_EQUAL(status::StatusUnknown,
+                sender_encoder.write_packet(address::Iface_AudioSource, pp));
+    LONGS_EQUAL(status::StatusUnknown,
+                sender_encoder.write_packet(address::Iface_AudioRepair, pp));
+    LONGS_EQUAL(status::StatusUnknown,
+                sender_encoder.write_packet(address::Iface_AudioControl, pp));
 }
 
 TEST(sender_encoder, activate_no_fec) {
@@ -108,15 +141,12 @@ TEST(sender_encoder, metrics) {
     CHECK(sender_encoder.is_valid());
 
     pipeline::SenderSlotMetrics slot_metrics;
-    pipeline::SenderSessionMetrics sess_metrics;
+    pipeline::SenderParticipantMetrics party_metrics;
 
-    CHECK(sender_encoder.get_metrics(slot_metrics, sess_metrics));
-    CHECK(!slot_metrics.is_complete);
+    CHECK(sender_encoder.get_metrics(write_slot_metrics, &slot_metrics,
+                                     write_party_metrics, &party_metrics));
 
-    CHECK(sender_encoder.activate(address::Iface_AudioSource, address::Proto_RTP));
-
-    CHECK(sender_encoder.get_metrics(slot_metrics, sess_metrics));
-    CHECK(slot_metrics.is_complete);
+    LONGS_EQUAL(0, slot_metrics.num_participants);
 }
 
 } // namespace node

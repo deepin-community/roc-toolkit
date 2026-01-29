@@ -25,14 +25,16 @@
 extern "C" {
 #endif
 
-/** Receiver decoder node.
+/** Receiver decoder.
  *
  * Receiver decoder gets an encoded network packets from the user, decodes audio stream
- * from them, and provides it back to the user.
+ * from them, and provides decoded stream to the user.
  *
- * Receiver decoder is a simplified networkless version of \ref roc_receiver. It
- * implements the same pipeline, but instead of receiving packets, it just gets them
- * from the user. The user is responsible for delivering these packets to receiver.
+ * Receiver decoder is a networkless version of \ref roc_receiver. It implements the same
+ * pipeline, but instead of receiving packets from network, it gets them from the user.
+ * The user is responsible for carrying packets over network. Unlike \ref roc_receiver,
+ * it doesn't support multiple slots and conenctions. It consumes traffic from a single
+ * remote peer.
  *
  * For detailed description of receiver pipeline, see documentation for \ref roc_receiver.
  *
@@ -43,29 +45,46 @@ extern "C" {
  * - The user activates one or more interfaces by invoking
  *   roc_receiver_decoder_activate(). This tells decoder what types of streams to consume
  *   and what protocols to use for them (e.g. only audio packets or also redundancy
- *   packets).
+ *   and control packets).
  *
  * - The per-interface streams of encoded packets are iteratively pushed to the decoder
- *   using roc_receiver_decoder_push().
+ *   using roc_receiver_decoder_push_packet().
  *
  * - The audio stream is iteratively popped from the decoder using
- *   roc_receiver_decoder_pop(). User should push all available packets to all
+ *   roc_receiver_decoder_pop_frame(). User should push all available packets to all
  *   interfaces before popping a frame.
  *
  * - User is responsible for delivering packets from \ref roc_sender_encoder and pushing
  *   them to appropriate interfaces of decoder.
  *
- * - The receiver is eventually destroyed using roc_receiver_decoder_close().
+ * - In addition, if a control interface is activated, the stream of encoded feedback
+ *   packets is popped from decoder internal queue using
+ *   roc_receiver_decoder_pop_feedback_packet().
+ *
+ * - User is responsible for delivering feedback packets back to \ref roc_sender_encoder
+ *   and pushing them to appropriate interfaces of encoder.
+ *
+ * - Decoder is eventually destroyed using roc_receiver_decoder_close().
  *
  * **Interfaces and protocols**
  *
- * Receiver decoder may have one or several *interfaces*, as defined in \ref
- * roc_interface. The interface defines the type of the communication with the remote node
+ * Receiver decoder may have one or several *interfaces*, as defined in \c
+ * roc_interface. The interface defines the type of the communication with the remote peer
  * and the set of the protocols supported by it.
  *
- * Each interface has its own packet queue. When a packet is pushed to the decoder, it
- * is accumulated in the queue. When a frame is popped from the decoder, it consumes
- * those accumulated packets.
+ * Each interface has its own inbound packet queue. When a packet is pushed to the
+ * decoder, it is accumulated in the queue. When a frame is popped from the decoder, it
+ * consumes those accumulated packets.
+ *
+ * **Feedback packets**
+ *
+ * Control interface in addition has outbound packet queue. When a frame is popped from
+ * decoder, it generates feedback packets and pushes them to the queue. Then those
+ * packets are popped from the queue.
+ *
+ * The user should deliver feedback packets from decoder back to encoder. Feedback packets
+ * allow decoder and encoder to exchange metrics like latency and losses, and several
+ * features like latency calculations require feedback to function properly.
  *
  * **Thread safety**
  *
@@ -104,7 +123,7 @@ ROC_API int roc_receiver_decoder_open(roc_context* context,
  * Checks that the protocol is valid and supported by the interface, and
  * initializes given interface with given protocol.
  *
- * The user should invoke roc_receiver_decoder_push() for all activated interfaces
+ * The user should invoke roc_receiver_decoder_push_packet() for all activated interfaces
  * and deliver packets from appropriate interfaces of \ref roc_sender_encoder.
  *
  * **Parameters**
@@ -123,40 +142,39 @@ ROC_API int roc_receiver_decoder_activate(roc_receiver_decoder* decoder,
 
 /** Query decoder metrics.
  *
- * Reads decoder metrics into provided struct.
+ * Reads metrics into provided structs.
  *
- * To retrieve per-session metrics, set \c sessions field of \ref roc_receiver_metrics
- * to a buffer of \ref roc_session_metrics structs, and \c sessions_size to the number
- * of structs in buffer. The function will write session metrcis to the buffer and
- * update \c sessions_size with the actual number of sessions written.
+ * Metrics for decoder as a whole are written in \p decoder_metrics. If connection
+ * was already established (which happens after pushing some packets from remote
+ * peer to decoder), metrics for connection are written to \p conn_metrics.
  *
- * If \c sessions_size is lesser than actual number of sessions, metrics for some
- * sessions will be dropped. \c num_sessions will always contain actual total number.
- *
- * If \c sessions field is NULL, per-session metrics are not retrieved.
+ * Decoder can have either no connections or one connection. This is reported via
+ * \c connection_count field of \p decoder_metrics, which is set to either 0 or 1.
  *
  * **Parameters**
- *  - \p decoder should point to an opened decoder
- *  - \p metrics specifies struct where to write metrics
+ *  - \p receiver should point to an opened receiver
+ *  - \p decoder_metrics defines a struct where to write metrics for decoder
+ *  - \p conn_metrics defines a struct where to write metrics for connection
+ *    (if \c connection_count is non-zero)
  *
  * **Returns**
- *  - returns zero if the slot was successfully removed
+ *  - returns zero if the metrics were successfully retrieved
  *  - returns a negative value if the arguments are invalid
- *  - returns a negative value if the slot does not exist
  *
  * **Ownership**
- *  - doesn't take or share the ownership of \p metrics or its \c sessions field; they
- *    may be safely deallocated after the function returns
+ *  - doesn't take or share the ownership of the provided buffers;
+ *    they may be safely deallocated after the function returns
  */
 ROC_API int roc_receiver_decoder_query(roc_receiver_decoder* decoder,
-                                       roc_receiver_metrics* metrics);
+                                       roc_receiver_metrics* decoder_metrics,
+                                       roc_connection_metrics* conn_metrics);
 
 /** Write packet to decoder.
  *
- * Add encoded packet to the interface queue.
+ * Adds encoded packet to the interface queue.
  *
  * The user should iteratively push all delivered packets to appropriate interfaces. They
- * will be later consumed by roc_receiver_decoder_pop().
+ * will be later consumed by roc_receiver_decoder_pop_frame().
  *
  * **Parameters**
  *  - \p decoder should point to an opened decoder
@@ -174,9 +192,40 @@ ROC_API int roc_receiver_decoder_query(roc_receiver_decoder* decoder,
  *  - doesn't take or share the ownership of \p packet; it may be safely deallocated
  *    after the function returns
  */
-ROC_API int roc_receiver_decoder_push(roc_receiver_decoder* decoder,
-                                      roc_interface iface,
-                                      const roc_packet* packet);
+ROC_API int roc_receiver_decoder_push_packet(roc_receiver_decoder* decoder,
+                                             roc_interface iface,
+                                             const roc_packet* packet);
+
+/** Read feedback packet from decoder.
+ *
+ * Removes encoded feedback packet from control interface queue and returns it
+ * to the user.
+ *
+ * Feedback packets are added to the queue from roc_receiver_decoder_pop_frame(). Each
+ * frame pop may produce multiple packets, so the user should iteratively pop packets
+ * until error. This should be repeated for all activated control interfaces.
+ *
+ * **Parameters**
+ *  - \p decoder should point to an opened decoder
+ *  - \p packet should point to an initialized packet; it should contain pointer to
+ *    a buffer and it's size; packet bytes are copied to user's buffer and the
+ *    size field is updated with the actual packet size
+ *
+ * **Returns**
+ *  - returns zero if a packet was successfully copied from decoder
+ *  - returns a negative value if there are no more packets for this interface
+ *  - returns a negative value if the interface is not activated
+ *  - returns a negative value if the buffer size of the provided packet is too small
+ *  - returns a negative value if the arguments are invalid
+ *  - returns a negative value on resource allocation failure
+ *
+ * **Ownership**
+ *  - doesn't take or share the ownership of \p packet; it may be safely deallocated
+ *    after the function returns
+ */
+ROC_API int roc_receiver_decoder_pop_feedback_packet(roc_receiver_decoder* decoder,
+                                                     roc_interface iface,
+                                                     roc_packet* packet);
 
 /** Read samples from decoder.
  *
@@ -203,7 +252,8 @@ ROC_API int roc_receiver_decoder_push(roc_receiver_decoder* decoder,
  *  - doesn't take or share the ownership of \p frame; it may be safely deallocated
  *    after the function returns
  */
-ROC_API int roc_receiver_decoder_pop(roc_receiver_decoder* decoder, roc_frame* frame);
+ROC_API int roc_receiver_decoder_pop_frame(roc_receiver_decoder* decoder,
+                                           roc_frame* frame);
 
 /** Close decoder.
  *

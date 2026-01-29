@@ -12,11 +12,10 @@
 #ifndef ROC_AUDIO_RESAMPLER_MAP_H_
 #define ROC_AUDIO_RESAMPLER_MAP_H_
 
+#include "roc_audio/frame_factory.h"
 #include "roc_audio/iresampler.h"
-#include "roc_audio/resampler_backend.h"
-#include "roc_audio/resampler_profile.h"
+#include "roc_audio/resampler_config.h"
 #include "roc_audio/sample_spec.h"
-#include "roc_core/buffer_factory.h"
 #include "roc_core/iarena.h"
 #include "roc_core/noncopyable.h"
 #include "roc_core/shared_ptr.h"
@@ -45,13 +44,11 @@ public:
     bool is_supported(ResamplerBackend backend_id) const;
 
     //! Instantiate IResampler for given backend ID.
-    core::SharedPtr<IResampler>
-    new_resampler(ResamplerBackend backend_id,
-                  core::IArena& arena,
-                  core::BufferFactory<sample_t>& buffer_factory,
-                  ResamplerProfile profile,
-                  const audio::SampleSpec& in_spec,
-                  const audio::SampleSpec& out_spec);
+    core::SharedPtr<IResampler> new_resampler(core::IArena& arena,
+                                              FrameFactory& frame_factory,
+                                              const ResamplerConfig& config,
+                                              const SampleSpec& in_spec,
+                                              const SampleSpec& out_spec);
 
 private:
     friend class core::Singleton<ResamplerMap>;
@@ -66,10 +63,10 @@ private:
 
         ResamplerBackend id;
         core::SharedPtr<IResampler> (*ctor)(core::IArena& arena,
-                                            core::BufferFactory<sample_t>& buffer_factory,
+                                            FrameFactory& frame_factory,
                                             ResamplerProfile profile,
-                                            const audio::SampleSpec& in_spec,
-                                            const audio::SampleSpec& out_spec);
+                                            const SampleSpec& in_spec,
+                                            const SampleSpec& out_spec);
     };
 
     ResamplerMap();

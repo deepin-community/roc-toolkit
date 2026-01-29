@@ -38,7 +38,7 @@ int roc_sender_open(roc_context* context,
         return -1;
     }
 
-    pipeline::SenderConfig imp_config;
+    pipeline::SenderSinkConfig imp_config;
     if (!api::sender_config_from_user(*imp_context, imp_config, *config)) {
         roc_log(LogError, "roc_sender_open(): invalid arguments: bad config");
         return -1;
@@ -84,8 +84,8 @@ int roc_sender_configure(roc_sender* sender,
         return -1;
     }
 
-    netio::UdpSenderConfig imp_config;
-    if (!api::sender_interface_config_from_user(imp_config, *config)) {
+    netio::UdpConfig imp_config;
+    if (!api::interface_config_from_user(imp_config, *config)) {
         roc_log(LogError, "roc_sender_configure(): invalid arguments: bad config");
         return -1;
     }
@@ -130,28 +130,31 @@ int roc_sender_connect(roc_sender* sender,
     return 0;
 }
 
-int roc_sender_query(roc_sender* sender, roc_slot slot, roc_sender_metrics* metrics) {
+int roc_sender_query(roc_sender* sender,
+                     roc_slot slot,
+                     roc_sender_metrics* slot_metrics,
+                     roc_connection_metrics* conn_metrics,
+                     size_t* conn_metrics_count) {
     if (!sender) {
         roc_log(LogError, "roc_sender_query(): invalid arguments: sender is null");
         return -1;
     }
 
-    if (!metrics) {
-        roc_log(LogError, "roc_sender_query(): invalid arguments: metrics are null");
+    if (conn_metrics && !conn_metrics_count) {
+        roc_log(LogError,
+                "roc_sender_query(): invalid arguments:"
+                " conn_metrics is non-null, but conn_metrics_count is null");
         return -1;
     }
 
     node::Sender* imp_sender = (node::Sender*)sender;
 
-    pipeline::SenderSlotMetrics slot_metrics;
-    pipeline::SenderSessionMetrics sess_metrics;
-
-    if (!imp_sender->get_metrics(slot, slot_metrics, sess_metrics)) {
+    if (!imp_sender->get_metrics(slot, api::sender_slot_metrics_to_user, slot_metrics,
+                                 api::sender_participant_metrics_to_user,
+                                 conn_metrics_count, conn_metrics)) {
         roc_log(LogError, "roc_sender_query(): operation failed");
         return -1;
     }
-
-    api::sender_metrics_to_user(*metrics, slot_metrics, sess_metrics);
 
     return 0;
 }
@@ -202,7 +205,8 @@ int roc_sender_write(roc_sender* sender, const roc_frame* frame) {
     }
 
     if (!frame->samples) {
-        roc_log(LogError, "roc_sender_write(): invalid arguments: samples is null");
+        roc_log(LogError,
+                "roc_sender_write(): invalid arguments: frame samples buffer is null");
         return -1;
     }
 

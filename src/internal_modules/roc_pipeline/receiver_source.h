@@ -12,23 +12,20 @@
 #ifndef ROC_PIPELINE_RECEIVER_SOURCE_H_
 #define ROC_PIPELINE_RECEIVER_SOURCE_H_
 
+#include "roc_audio/frame_factory.h"
 #include "roc_audio/iframe_reader.h"
 #include "roc_audio/mixer.h"
-#include "roc_audio/poison_reader.h"
+#include "roc_audio/pcm_mapper_reader.h"
 #include "roc_audio/profiling_reader.h"
-#include "roc_core/buffer_factory.h"
 #include "roc_core/iarena.h"
-#include "roc_core/mutex.h"
 #include "roc_core/optional.h"
 #include "roc_core/stddefs.h"
-#include "roc_packet/ireader.h"
-#include "roc_packet/iwriter.h"
 #include "roc_packet/packet_factory.h"
 #include "roc_pipeline/config.h"
 #include "roc_pipeline/receiver_endpoint.h"
 #include "roc_pipeline/receiver_slot.h"
-#include "roc_pipeline/receiver_state.h"
-#include "roc_rtp/format_map.h"
+#include "roc_pipeline/state_tracker.h"
+#include "roc_rtp/encoding_map.h"
 #include "roc_sndio/isource.h"
 
 namespace roc {
@@ -46,23 +43,23 @@ namespace pipeline {
 class ReceiverSource : public sndio::ISource, public core::NonCopyable<> {
 public:
     //! Initialize.
-    ReceiverSource(const ReceiverConfig& config,
-                   const rtp::FormatMap& format_map,
-                   packet::PacketFactory& packet_factory,
-                   core::BufferFactory<uint8_t>& byte_buffer_factory,
-                   core::BufferFactory<audio::sample_t>& sample_buffer_factory,
+    ReceiverSource(const ReceiverSourceConfig& source_config,
+                   const rtp::EncodingMap& encoding_map,
+                   core::IPool& packet_pool,
+                   core::IPool& packet_buffer_pool,
+                   core::IPool& frame_buffer_pool,
                    core::IArena& arena);
 
     //! Check if the pipeline was successfully constructed.
     bool is_valid() const;
 
     //! Create slot.
-    ReceiverSlot* create_slot();
+    ReceiverSlot* create_slot(const ReceiverSlotConfig& slot_config);
 
     //! Delete slot.
     void delete_slot(ReceiverSlot* slot);
 
-    //! Get number of connected sessions.
+    //! Get number of active sessions.
     size_t num_sessions() const;
 
     //! Pull packets and refresh pipeline according to current time.
@@ -74,6 +71,12 @@ public:
     //!  deadline (absolute time) when refresh should be invoked again
     //!  if there are no frames
     core::nanoseconds_t refresh(core::nanoseconds_t current_time);
+
+    //! Cast IDevice to ISink.
+    virtual sndio::ISink* to_sink();
+
+    //! Cast IDevice to ISink.
+    virtual sndio::ISource* to_source();
 
     //! Get device type.
     virtual sndio::DeviceType type() const;
@@ -112,24 +115,25 @@ public:
     virtual bool read(audio::Frame&);
 
 private:
-    const rtp::FormatMap& format_map_;
+    ReceiverSourceConfig source_config_;
 
-    packet::PacketFactory& packet_factory_;
-    core::BufferFactory<uint8_t>& byte_buffer_factory_;
-    core::BufferFactory<audio::sample_t>& sample_buffer_factory_;
+    const rtp::EncodingMap& encoding_map_;
+
+    packet::PacketFactory packet_factory_;
+    audio::FrameFactory frame_factory_;
     core::IArena& arena_;
 
-    ReceiverState state_;
+    StateTracker state_tracker_;
 
     core::Optional<audio::Mixer> mixer_;
-    core::Optional<audio::PoisonReader> poisoner_;
     core::Optional<audio::ProfilingReader> profiler_;
+    core::Optional<audio::PcmMapperReader> pcm_mapper_;
 
     core::List<ReceiverSlot> slots_;
 
-    audio::IFrameReader* audio_reader_;
+    audio::IFrameReader* frame_reader_;
 
-    ReceiverConfig config_;
+    bool valid_;
 };
 
 } // namespace pipeline

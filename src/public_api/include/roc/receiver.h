@@ -25,7 +25,7 @@
 extern "C" {
 #endif
 
-/** Receiver node.
+/** Receiver peer.
  *
  * Receiver gets the network packets from multiple senders, decodes audio streams
  * from them, mixes multiple streams into a single stream, and returns it to the user.
@@ -61,7 +61,7 @@ extern "C" {
  * zero and are created automatically. In simple cases just use \c ROC_SLOT_DEFAULT.
  *
  * Each slot has its own set of *interfaces*, one per each type defined in \ref
- * roc_interface. The interface defines the type of the communication with the remote node
+ * roc_interface. The interface defines the type of the communication with the remote peer
  * and the set of the protocols supported by it.
  *
  * Supported actions with the interface:
@@ -90,7 +90,7 @@ extern "C" {
  * to do it from another thread concurrently with reading frames. Operations with
  * slots won't block concurrent reads.
  *
- * **FEC scheme**
+ * **FEC schemes**
  *
  * If \ref ROC_INTERFACE_CONSOLIDATED is used, it automatically creates all necessary
  * transport interfaces and the user should not bother about them.
@@ -110,44 +110,55 @@ extern "C" {
  * scheme. For example, if \ref ROC_FEC_ENCODING_RS8M is used, the protocols should be
  * \ref ROC_PROTO_RTP_RS8M_SOURCE and \ref ROC_PROTO_RS8M_REPAIR.
  *
- * **Sessions**
+ * **Connections**
  *
- * Receiver creates a session object for every sender connected to it. Sessions can appear
- * and disappear at any time. Multiple sessions can be active at the same time.
+ * Receiver creates a connection object for every sender connected to it. Connections can
+ * appear and disappear at any time. Multiple connections can be active at the same time.
  *
- * A session is identified by the sender address. A session may contain multiple packet
- * streams sent to different receiver ports. If the sender employs FEC, the session will
- * contain source and repair packet streams. Otherwise, the session will contain a single
- * source packet stream.
+ * A connection may contain multiple streams sent to different receiver ports. If the
+ * sender employs FEC, connection usually has source, repair, and control streams.
+ * Otherwise, connection usually has source and control streams.
  *
- * A session is created automatically on the reception of the first packet from a new
- * address and destroyed when there are no packets during a timeout. A session is also
- * destroyed on other events like a large latency underrun or overrun or broken playback,
- * but if the sender continues to send packets, it will be created again shortly.
+ * Connection is created automatically on the reception of the first packet from a new
+ * sender, and terminated when there are no packets during a timeout. Connection can also
+ * be terminated on other events like a large latency underrun or overrun or continous
+ * stuttering, but if the sender continues to send packets, connection will be created
+ * again shortly.
  *
  * **Mixing**
  *
- * Receiver mixes audio streams from all currently active sessions into a single output
+ * Receiver mixes audio streams from all currently active connections into a single output
  * stream.
  *
- * The output stream continues no matter how much active sessions there are at the moment.
- * In particular, if there are no sessions, the receiver produces a stream with all zeros.
+ * The output stream continues no matter how much active connections there are at the
+ * moment. In particular, if there are no connections, the receiver produces a stream with
+ * all zeros.
  *
- * Sessions can be added and removed from the output stream at any time, probably in the
- * middle of a frame.
+ * Connections can be added and removed from the output stream at any time, probably in
+ * the middle of a frame.
  *
- * **Sample rate**
+ * **Transcoding**
  *
- * Every session may have a different sample rate. And even if nominally all of them are
- * of the same rate, device frequencies usually differ by a few tens of Hertz.
+ * Every connection may have a different sample rate, channel layout, and encoding.
  *
- * Receiver compensates these differences by adjusting the rate of every session stream to
- * the rate of the receiver output stream using a per-session resampler. The frequencies
- * factor between the sender and the receiver clocks is calculated dynamically for every
- * session based on the session incoming packet queue size.
+ * Before mixing, receiver automatically transcodes all incoming streams to the format
+ * of receiver frames.
  *
- * Resampling is a quite time-consuming operation. The user can choose between several
- * resampler profiles providing different compromises between CPU consumption and quality.
+ * **Latency tuning and bounding**
+ *
+ * If latency tuning is enabled (which is by default enabled on receiver), receiver
+ * monitors latency of each connection and adjusts per-connection clock to keep latency
+ * close to the target value. The user can configure how the latency is measured, how
+ * smooth is the tuning, and the target value.
+ *
+ * If latency bounding is enabled (which is also by default enabled on receiver), receiver
+ * also ensures that latency lies within allowed boundaries, and terminates connection
+ * otherwise. The user can configure those boundaries.
+ *
+ * To adjust connection clock, receiver uses resampling with a scaling factor slightly
+ * above or below 1.0. Since resampling may be a quite time-consuming operation, the user
+ * can choose between several resampler backends and profiles providing different
+ * compromises between CPU consumption, quality, and precision.
  *
  * **Clock source**
  *
@@ -216,7 +227,7 @@ ROC_API int roc_receiver_open(roc_context* context,
  *
  * **Parameters**
  *  - \p receiver should point to an opened receiver
- *  - \p slot specifies the receiver slot
+ *  - \p slot specifies the receiver slot (if in doubt, use \c ROC_SLOT_DEFAULT)
  *  - \p iface specifies the receiver interface
  *  - \p config should be point to an initialized config
  *
@@ -254,7 +265,7 @@ ROC_API int roc_receiver_configure(roc_receiver* receiver,
  *
  * **Parameters**
  *  - \p receiver should point to an opened receiver
- *  - \p slot specifies the receiver slot
+ *  - \p slot specifies the receiver slot (if in doubt, use \c ROC_SLOT_DEFAULT)
  *  - \p iface specifies the receiver interface
  *  - \p endpoint specifies the receiver endpoint
  *
@@ -275,39 +286,47 @@ ROC_API int roc_receiver_bind(roc_receiver* receiver,
 
 /** Query receiver slot metrics.
  *
- * Reads receiver slot metrics into provided struct.
+ * Reads metrics into provided structs.
  *
- * To retrieve per-session metrics, set \c sessions field of \ref roc_receiver_metrics
- * to a buffer of \ref roc_session_metrics structs, and \c sessions_size to the number
- * of structs in buffer. The function will write session metrcis to the buffer and
- * update \c sessions_size with the actual number of sessions written.
+ * To retrieve metrics of the slot as a whole, set \c slot_metrics to point to a single
+ * \ref roc_receiver_metrics struct.
  *
- * If \c sessions_size is lesser than actual number of sessions, metrics for some
- * sessions will be dropped. \c num_sessions will always contain actual total number.
+ * To retrieve metrics of specific connections of the slot, set \c conn_metrics to point
+ * to an array of \ref roc_connection_metrics structs, and \c conn_metrics_count to the
+ * number of elements in the array. The function will write metrcis to the array (no more
+ * than array size) and update \c conn_metrics_count with the number of elements written.
  *
- * If \c sessions field is NULL, per-session metrics are not retrieved.
+ * Actual number of connections (regardless of the array size) is also written to
+ * \c connection_count field of \ref roc_receiver_metrics.
  *
  * **Parameters**
  *  - \p receiver should point to an opened receiver
- *  - \p slot specifies the receiver slot
- *  - \p metrics specifies struct where to write metrics
+ *  - \p slot specifies the receiver slot (if in doubt, use \c ROC_SLOT_DEFAULT)
+ *  - \p slot_metrics defines a struct where to write slot metrics (may be NULL)
+ *  - \p conn_metrics defines an array of structs where to write connection metrics
+ *    (may be NULL)
+ *  - \p conn_metrics_count defines number of elements in array
+ *    (may be NULL if \c conn_metrics is NULL)
  *
  * **Returns**
- *  - returns zero if the slot was successfully removed
+ *  - returns zero if the metrics were successfully retrieved
  *  - returns a negative value if the arguments are invalid
  *  - returns a negative value if the slot does not exist
  *
  * **Ownership**
- *  - doesn't take or share the ownership of \p metrics or its \c sessions field; they
- *    may be safely deallocated after the function returns
+ *  - doesn't take or share the ownership of the provided buffers;
+ *    they may be safely deallocated after the function returns
  */
-ROC_API int
-roc_receiver_query(roc_receiver* receiver, roc_slot slot, roc_receiver_metrics* metrics);
+ROC_API int roc_receiver_query(roc_receiver* receiver,
+                               roc_slot slot,
+                               roc_receiver_metrics* slot_metrics,
+                               roc_connection_metrics* conn_metrics,
+                               size_t* conn_metrics_count);
 
 /** Delete receiver slot.
  *
  * Disconnects, unbinds, and removes all slot interfaces and removes the slot.
- * All associated connections to remote nodes are properly terminated.
+ * All associated connections to remote peers are properly terminated.
  *
  * After unlinking the slot, it can be re-created again by re-using slot index.
  *
@@ -324,10 +343,9 @@ ROC_API int roc_receiver_unlink(roc_receiver* receiver, roc_slot slot);
 
 /** Read samples from the receiver.
  *
- * Reads retrieved network packets, decodes packets, routes packets to sessions, repairs
- * losses, extracts samples, adjusts sample rate and channel layout, compensates clock
- * drift, mixes samples from all sessions, and finally stores samples into the provided
- * frame.
+ * Reads retrieved network packets, decodes packets, repairs losses, extracts samples,
+ * adjusts sample rate and channel layout, compensates clock drift, mixes samples from all
+ * connections, and finally stores samples into the provided frame.
  *
  * If \ref ROC_CLOCK_SOURCE_INTERNAL is used, the function blocks until it's time to
  * decode the samples according to the configured sample rate.

@@ -13,12 +13,10 @@
 #define ROC_PIPELINE_CONFIG_H_
 
 #include "roc_address/protocol.h"
-#include "roc_audio/freq_estimator.h"
-#include "roc_audio/latency_monitor.h"
+#include "roc_audio/feedback_monitor.h"
+#include "roc_audio/latency_tuner.h"
 #include "roc_audio/profiler.h"
-#include "roc_audio/resampler_backend.h"
-#include "roc_audio/resampler_map.h"
-#include "roc_audio/resampler_profile.h"
+#include "roc_audio/resampler_config.h"
 #include "roc_audio/sample_spec.h"
 #include "roc_audio/watchdog.h"
 #include "roc_core/stddefs.h"
@@ -27,8 +25,9 @@
 #include "roc_fec/reader.h"
 #include "roc_fec/writer.h"
 #include "roc_packet/units.h"
-#include "roc_rtp/headers.h"
-#include "roc_rtp/validator.h"
+#include "roc_pipeline/pipeline_loop.h"
+#include "roc_rtcp/config.h"
+#include "roc_rtp/filter.h"
 
 namespace roc {
 namespace pipeline {
@@ -38,6 +37,7 @@ const size_t DefaultSampleRate = 44100;
 
 //! Default sample specification.
 static const audio::SampleSpec DefaultSampleSpec(DefaultSampleRate,
+                                                 audio::Sample_RawFormat,
                                                  audio::ChanLayout_Surround,
                                                  audio::ChanOrder_Smpte,
                                                  audio::ChanMask_Surround_Stereo);
@@ -54,60 +54,19 @@ const core::nanoseconds_t DefaultPacketLength = 5 * core::Millisecond;
 //!  networks allow lower latencies, and some networks require higher.
 const core::nanoseconds_t DefaultLatency = 200 * core::Millisecond;
 
-//! Task processing parameters.
-struct TaskConfig {
-    //! Enable precise task scheduling mode (default).
-    //! The other settings have effect only when this is set to true.
-    //! When enabled, pipeline processes tasks in dedicated time intervals between
-    //! sub-frame and between frames, trying to prevent time collisions between
-    //! task and frame processing.
-    bool enable_precise_task_scheduling;
+//! Parameters of sender sink and sender session.
+struct SenderSinkConfig {
+    //! Input sample spec
+    audio::SampleSpec input_sample_spec;
 
-    //! Minimum frame duration between processing tasks.
-    //! In-frame task processing does not happen until at least given number
-    //! of samples is processed.
-    //! Set to zero to allow task processing between frames of any size.
-    core::nanoseconds_t min_frame_length_between_tasks;
-
-    //! Maximum frame duration between processing tasks.
-    //! If the frame is larger than this size, it is split into multiple subframes
-    //! to allow task processing between the sub-frames.
-    //! Set to zero to disable frame splitting.
-    core::nanoseconds_t max_frame_length_between_tasks;
-
-    //! Mximum task processing duration happening immediatelly after processing a frame.
-    //! If this period expires and there are still pending tasks, asynchronous
-    //! task processing is scheduled.
-    //! At least one task is always processed after each frame, even if this
-    //! setting is too small.
-    core::nanoseconds_t max_inframe_task_processing;
-
-    //! Time interval during which no task processing is allowed.
-    //! This setting is used to prohibit task processing during the time when
-    //! next read() or write() call is expected.
-    //! Since it can not be calculated abolutely precisely, and there is always
-    //! thread switch overhead, scheduler jitter clock drift, we use a wide interval.
-    core::nanoseconds_t task_processing_prohibited_interval;
-
-    TaskConfig()
-        : enable_precise_task_scheduling(true)
-        , min_frame_length_between_tasks(200 * core::Microsecond)
-        , max_frame_length_between_tasks(1 * core::Millisecond)
-        , max_inframe_task_processing(20 * core::Microsecond)
-        , task_processing_prohibited_interval(200 * core::Microsecond) {
-    }
-};
-
-//! Sender parameters.
-struct SenderConfig {
     //! Task processing parameters.
-    TaskConfig tasks;
+    PipelineLoopConfig pipeline_loop;
 
-    //! To specify which resampling backend will be used.
-    audio::ResamplerBackend resampler_backend;
+    //! RTP payload type for audio packets.
+    unsigned payload_type;
 
-    //! Resampler profile.
-    audio::ResamplerProfile resampler_profile;
+    //! Packet length, in nanoseconds.
+    core::nanoseconds_t packet_length;
 
     //! FEC writer parameters.
     fec::WriterConfig fec_writer;
@@ -115,20 +74,26 @@ struct SenderConfig {
     //! FEC encoder parameters.
     fec::CodecConfig fec_encoder;
 
-    //! Input sample spec
-    audio::SampleSpec input_sample_spec;
+    //! Latency parameters.
+    audio::LatencyConfig latency;
 
-    //! Packet length, in nanoseconds.
-    core::nanoseconds_t packet_length;
+    //! Feedback parameters.
+    audio::FeedbackConfig feedback;
 
-    //! RTP payload type for audio packets.
-    unsigned payload_type;
+    //! Resampler parameters.
+    audio::ResamplerConfig resampler;
 
-    //! Interleave packets.
-    bool enable_interleaving;
+    //! Profiler configuration.
+    audio::ProfilerConfig profiler;
+
+    //! RTCP config.
+    rtcp::Config rtcp;
 
     //! Constrain receiver speed using a CPU timer according to the sample rate.
     bool enable_timing;
+
+    //! Automatically fill duration of input frames.
+    bool enable_auto_duration;
 
     //! Automatically fill capture timestamps of input frames with invocation time.
     bool enable_auto_cts;
@@ -136,79 +101,38 @@ struct SenderConfig {
     //! Profile moving average of frames being written.
     bool enable_profiling;
 
-    //! Profiler configuration.
-    audio::ProfilerConfig profiler_config;
+    //! Interleave packets.
+    bool enable_interleaving;
 
-    SenderConfig()
-        : resampler_backend(audio::ResamplerBackend_Default)
-        , resampler_profile(audio::ResamplerProfile_Medium)
-        , input_sample_spec(DefaultSampleSpec)
-        , packet_length(DefaultPacketLength)
-        , payload_type(rtp::PayloadType_L16_Stereo)
-        , enable_interleaving(false)
-        , enable_timing(false)
-        , enable_auto_cts(false)
-        , enable_profiling(false) {
-    }
+    //! Initialize config.
+    SenderSinkConfig();
+
+    //! Fill unset values with defaults.
+    void deduce_defaults();
 };
 
-//! Receiver session parameters.
-//! @remarks
-//!  Defines per-session receiver parameters.
-struct ReceiverSessionConfig {
-    //! Target latency, nanoseconds.
-    core::nanoseconds_t target_latency;
+//! Parameters of sender slot.
+struct SenderSlotConfig {
+    //! Initialize config.
+    SenderSlotConfig();
 
-    //! Packet payload type.
-    unsigned int payload_type;
-
-    //! FEC reader parameters.
-    fec::ReaderConfig fec_reader;
-
-    //! FEC decoder parameters.
-    fec::CodecConfig fec_decoder;
-
-    //! RTP validator parameters.
-    rtp::ValidatorConfig rtp_validator;
-
-    //! LatencyMonitor parameters.
-    audio::LatencyMonitorConfig latency_monitor;
-
-    //! Watchdog parameters.
-    audio::WatchdogConfig watchdog;
-
-    //! To specify which resampling backend will be used.
-    audio::ResamplerBackend resampler_backend;
-
-    //! Resampler profile.
-    audio::ResamplerProfile resampler_profile;
-
-    ReceiverSessionConfig()
-        : target_latency(DefaultLatency)
-        , payload_type(0)
-        , resampler_backend(audio::ResamplerBackend_Default)
-        , resampler_profile(audio::ResamplerProfile_Medium) {
-        latency_monitor.deduce_latency_tolerance(DefaultLatency);
-        watchdog.deduce_no_playback_timeout(DefaultLatency);
-    }
-
-    //! Automatically deduce resampler backend from FreqEstimator config.
-    void deduce_resampler_backend() {
-        if (latency_monitor.fe_enable
-            && latency_monitor.fe_profile == audio::FreqEstimatorProfile_Responsive) {
-            resampler_backend = audio::ResamplerBackend_Builtin;
-        } else {
-            resampler_backend = audio::ResamplerBackend_Default;
-        }
-    }
+    //! Fill unset values with defaults.
+    void deduce_defaults();
 };
 
-//! Receiver common parameters.
-//! @remarks
-//!  Defines receiver parameters common for all sessions.
+//! Parameters common for all receiver sessions.
 struct ReceiverCommonConfig {
-    //! Output sample spec
+    //! Output sample spec.
     audio::SampleSpec output_sample_spec;
+
+    //! Profiler configuration.
+    audio::ProfilerConfig profiler;
+
+    //! RTP filter parameters.
+    rtp::FilterConfig rtp_filter;
+
+    //! RTCP config.
+    rtcp::Config rtcp;
 
     //! Constrain receiver speed using a CPU timer according to the sample rate.
     bool enable_timing;
@@ -219,60 +143,95 @@ struct ReceiverCommonConfig {
     //! Profile moving average of frames being written.
     bool enable_profiling;
 
-    //! Profiler configuration.
-    audio::ProfilerConfig profiler_config;
+    //! Initialize config.
+    ReceiverCommonConfig();
+
+    //! Fill unset values with defaults.
+    void deduce_defaults();
+};
+
+//! Parameters of receiver session.
+struct ReceiverSessionConfig {
+    //! Packet payload type.
+    unsigned int payload_type;
+
+    //! FEC reader parameters.
+    fec::ReaderConfig fec_reader;
+
+    //! FEC decoder parameters.
+    fec::CodecConfig fec_decoder;
+
+    //! Latency parameters.
+    audio::LatencyConfig latency;
+
+    //! Watchdog parameters.
+    audio::WatchdogConfig watchdog;
+
+    //! Resampler parameters.
+    audio::ResamplerConfig resampler;
 
     //! Insert weird beeps instead of silence on packet loss.
     bool enable_beeping;
 
-    ReceiverCommonConfig()
-        : output_sample_spec(DefaultSampleSpec)
-        , enable_timing(false)
-        , enable_auto_reclock(false)
-        , enable_profiling(false)
-        , enable_beeping(false) {
-    }
+    //! Initialize config.
+    ReceiverSessionConfig();
+
+    //! Fill unset values with defaults.
+    void deduce_defaults();
 };
 
-//! Receiver parameters.
-struct ReceiverConfig {
-    //! Default parameters for receiver session.
-    ReceiverSessionConfig default_session;
+//! Parameters of receiver session.
+struct ReceiverSourceConfig {
+    //! Task processing parameters.
+    PipelineLoopConfig pipeline_loop;
 
     //! Parameters common for all sessions.
     ReceiverCommonConfig common;
 
-    //! Task processing parameters.
-    TaskConfig tasks;
+    //! Default parameters for a session.
+    ReceiverSessionConfig session_defaults;
+
+    //! Initialize config.
+    ReceiverSourceConfig();
+
+    //! Fill unset values with defaults.
+    void deduce_defaults();
+};
+
+//! Parameters of receiver slot.
+struct ReceiverSlotConfig {
+    //! Enable routing packets to multiple sessions within slot.
+    bool enable_routing;
+
+    //! Initialize config.
+    ReceiverSlotConfig();
+
+    //! Fill unset values with defaults.
+    void deduce_defaults();
 };
 
 //! Converter parameters.
 struct TranscoderConfig {
-    //! To specify which resampling backend will be used.
-    audio::ResamplerBackend resampler_backend;
-
-    //! Resampler profile.
-    audio::ResamplerProfile resampler_profile;
-
     //! Input sample spec
     audio::SampleSpec input_sample_spec;
 
     //! Output sample spec
     audio::SampleSpec output_sample_spec;
 
+    //! Resampler parameters.
+    audio::ResamplerConfig resampler;
+
+    //! Profiler configuration.
+    audio::ProfilerConfig profiler;
+
     //! Profile moving average of frames being written.
     bool enable_profiling;
 
-    //! Profiler configuration.
-    audio::ProfilerConfig profiler_config;
+    //! Initialize config.
+    TranscoderConfig();
 
-    TranscoderConfig()
-        : resampler_backend(audio::ResamplerBackend_Default)
-        , resampler_profile(audio::ResamplerProfile_Medium)
-        , input_sample_spec(DefaultSampleSpec)
-        , output_sample_spec(DefaultSampleSpec)
-        , enable_profiling(false) {
-    }
+    //! Fill unset values with defaults.
+    void deduce_defaults();
 };
 
 } // namespace pipeline

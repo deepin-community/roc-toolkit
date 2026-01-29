@@ -2,10 +2,12 @@
 
 export DEB_BUILD_MAINT_OPTIONS=hardening=+all
 
-SCONS_BUILD_FLAGS = --libdir=/usr/lib/$(DEB_HOST_MULTIARCH) --disable-openfec --enable-tests
+SCONS_BUILD_FLAGS = --libdir=/usr/lib/$(DEB_HOST_MULTIARCH) \
+                    --enable-tests \
+                    --disable-libunwind
 
-ifneq (,$(filter alpha hurd-amd64 hurd-i386 m68k sparc64 x32,$(DEB_HOST_ARCH)))
-SCONS_BUILD_FLAGS += --disable-libunwind
+ifneq (,$(filter sparc64,$(DEB_HOST_ARCH)))
+SCONS_BUILD_FLAGS += --disable-openfec
 endif
 
 %:
@@ -19,3 +21,7 @@ override_dh_auto_test:
 
 override_dh_auto_install:
 	scons ${SCONS_BUILD_FLAGS} install DESTDIR=debian/tmp
+	# Don't install the symlink "libroc.so.0" -> "libroc.so.0.X"
+	# This symlink is undesirable since the soname is not "libroc.so.0"
+	# but "libroc.so.0.X"; and usually versions 0.X break the API.
+	find debian/tmp/ -name 'libroc.so.0' -delete -print

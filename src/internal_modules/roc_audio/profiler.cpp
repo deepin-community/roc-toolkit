@@ -10,12 +10,13 @@
 #include "roc_core/log.h"
 #include "roc_core/panic.h"
 #include "roc_core/shared_ptr.h"
+#include "roc_core/time.h"
 
 namespace roc {
 namespace audio {
 
 Profiler::Profiler(core::IArena& arena,
-                   const audio::SampleSpec& sample_spec,
+                   const SampleSpec& sample_spec,
                    ProfilerConfig profiler_config)
     : rate_limiter_(profiler_config.profiling_interval)
     , interval_(profiler_config.profiling_interval)
@@ -33,11 +34,14 @@ Profiler::Profiler(core::IArena& arena,
     , sample_spec_(sample_spec)
     , valid_(false)
     , buffer_full_(false) {
-    if (sample_spec_.num_channels() == 0) {
-        roc_panic("profiler: num_channels is zero");
-    }
-    if (sample_spec_.sample_rate() == 0) {
-        roc_panic("profiler: sample_rate is zero");
+    if (profiler_config.profiling_interval < 0 || profiler_config.chunk_duration < 0
+        || chunk_length_ == 0 || num_chunks_ == 0) {
+        roc_log(LogError,
+                "profile: invalid config:"
+                " profiling_interval=%.3fms chunk_duration=%.3fms",
+                (double)profiler_config.profiling_interval / core::Millisecond,
+                (double)profiler_config.chunk_duration / core::Millisecond);
+        return;
     }
 
     if (!chunks_.resize(num_chunks_)) {
@@ -52,12 +56,44 @@ bool Profiler::is_valid() const {
     return valid_;
 }
 
-void Profiler::update_moving_avg_(size_t frame_size, core::nanoseconds_t elapsed) {
-    const float frame_speed =
-        float(frame_size * core::Second) / elapsed / sample_spec_.num_channels();
+void Profiler::add_frame(packet::stream_timestamp_t frame_duration,
+                         core::nanoseconds_t elapsed) {
+    roc_panic_if(!valid_);
 
-    while (frame_size > 0) {
-        size_t n_samples = std::min(frame_size, (chunk_length_ - last_chunk_samples_));
+    update_moving_avg_(frame_duration, elapsed);
+
+    if (rate_limiter_.allow()) {
+        roc_log(LogDebug,
+                "profiler: avg for last %.1f sec: %lu sample/sec (%.2f sec/sec)",
+                (double)interval_ / core::Second, (unsigned long)get_moving_avg(),
+                (double)get_moving_avg() / sample_spec_.sample_rate());
+    }
+}
+
+float Profiler::get_moving_avg() {
+    if (!buffer_full_) {
+        const size_t num_samples_in_moving_avg = (chunk_length_ * last_chunk_num_);
+
+        return (moving_avg_ * num_samples_in_moving_avg
+                + chunks_[last_chunk_num_] * last_chunk_samples_)
+            / (num_samples_in_moving_avg + last_chunk_samples_);
+    } else {
+        const size_t num_samples_in_moving_avg = (chunk_length_ * (num_chunks_ - 1));
+
+        return (moving_avg_ * num_samples_in_moving_avg
+                - chunks_[first_chunk_num_] * last_chunk_samples_
+                + chunks_[last_chunk_num_] * last_chunk_samples_)
+            / num_samples_in_moving_avg;
+    }
+}
+
+void Profiler::update_moving_avg_(packet::stream_timestamp_t frame_duration,
+                                  core::nanoseconds_t elapsed) {
+    const float frame_speed = float(frame_duration * core::Second) / elapsed;
+
+    while (frame_duration > 0) {
+        size_t n_samples =
+            std::min((size_t)frame_duration, (chunk_length_ - last_chunk_samples_));
 
         float& last_chunk_speed = chunks_[last_chunk_num_];
         last_chunk_samples_ += n_samples;
@@ -90,41 +126,7 @@ void Profiler::update_moving_avg_(size_t frame_size, core::nanoseconds_t elapsed
             chunks_[last_chunk_num_] = 0;
         }
 
-        frame_size -= n_samples;
-    }
-}
-
-void Profiler::add_frame(size_t frame_size, core::nanoseconds_t elapsed) {
-    roc_panic_if(!valid_);
-
-    if (frame_size % sample_spec_.num_channels() != 0) {
-        roc_panic("profiler: unexpected frame size");
-    }
-
-    update_moving_avg_(frame_size, elapsed);
-
-    if (rate_limiter_.allow()) {
-        roc_log(LogDebug,
-                "profiler: avg for last %.1f sec: %lu sample/sec (%.2f sec/sec)",
-                (double)interval_ / core::Second, (unsigned long)get_moving_avg(),
-                (double)get_moving_avg() / sample_spec_.sample_rate());
-    }
-}
-
-float Profiler::get_moving_avg() {
-    if (!buffer_full_) {
-        const size_t num_samples_in_moving_avg = (chunk_length_ * last_chunk_num_);
-
-        return (moving_avg_ * num_samples_in_moving_avg
-                + chunks_[last_chunk_num_] * last_chunk_samples_)
-            / (num_samples_in_moving_avg + last_chunk_samples_);
-    } else {
-        const size_t num_samples_in_moving_avg = (chunk_length_ * (num_chunks_ - 1));
-
-        return (moving_avg_ * num_samples_in_moving_avg
-                - chunks_[first_chunk_num_] * last_chunk_samples_
-                + chunks_[last_chunk_num_] * last_chunk_samples_)
-            / num_samples_in_moving_avg;
+        frame_duration -= (packet::stream_timestamp_t)n_samples;
     }
 }
 

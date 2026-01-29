@@ -43,11 +43,11 @@ struct TestObject {
 
 TEST_GROUP(slab_pool) {};
 
-TEST(slab_pool, object_size) {
+TEST(slab_pool, allocation_size) {
     TestArena arena;
     SlabPool<TestObject> pool("test", arena);
 
-    LONGS_EQUAL(sizeof(TestObject), pool.object_size());
+    CHECK(sizeof(TestObject) < pool.allocation_size());
 }
 
 TEST(slab_pool, allocate_deallocate) {
@@ -500,7 +500,7 @@ TEST(slab_pool, guard_object) {
 TEST(slab_pool, guard_object_violations) {
     TestArena arena;
     SlabPool<TestObject, 1> pool("test", arena, sizeof(TestObject), 0, 0,
-                                 (DefaultSlabPoolFlags & ~SlabPoolFlag_EnableGuards));
+                                 (SlabPool_DefaultGuards & ~SlabPool_OverflowGuard));
     void* pointers[2] = {};
 
     pointers[0] = pool.allocate();
@@ -529,7 +529,7 @@ TEST(slab_pool, guard_object_violations) {
 TEST(slab_pool, object_ownership_guard) {
     TestArena arena;
     SlabPool<TestObject, 1> pool0("test", arena, sizeof(TestObject), 0, 0,
-                                  (DefaultSlabPoolFlags & ~SlabPoolFlag_EnableGuards));
+                                  (SlabPool_DefaultGuards & ~SlabPool_OwnershipGuard));
     SlabPool<TestObject, 1> pool1("test", arena);
 
     void* pointers[2] = {};

@@ -8,7 +8,6 @@
 
 #include <CppUTest/TestHarness.h>
 
-#include "roc_core/buffer_factory.h"
 #include "roc_core/heap_arena.h"
 #include "roc_fec/composer.h"
 #include "roc_fec/parser.h"
@@ -81,6 +80,11 @@ const uint8_t Ref_rs8m_repair[] = {
     0x09, 0x0a
 };
 
+enum { BufferSize = 1000 };
+
+core::HeapArena arena;
+packet::PacketFactory packet_factory(arena, BufferSize);
+
 struct PacketTest {
     packet::IComposer* composer;
     packet::IParser* parser;
@@ -94,15 +98,11 @@ struct PacketTest {
     size_t reference_size;
 };
 
-core::HeapArena arena;
-core::BufferFactory<uint8_t> buffer_factory(arena, 1000);
-packet::PacketFactory packet_factory(arena);
-
 void fill_packet(packet::Packet& packet, bool is_rtp) {
     if (is_rtp) {
         CHECK(packet.rtp());
 
-        packet.rtp()->source = Test_rtp_source;
+        packet.rtp()->source_id = Test_rtp_source;
         packet.rtp()->seqnum = Test_rtp_seqnum;
         packet.rtp()->stream_timestamp = Test_rtp_timestamp;
         packet.rtp()->payload_type = Test_rtp_pt;
@@ -135,7 +135,7 @@ void check_packet(packet::Packet& packet,
     if (is_rtp) {
         CHECK(packet.rtp());
 
-        UNSIGNED_LONGS_EQUAL(Test_rtp_source, packet.rtp()->source);
+        UNSIGNED_LONGS_EQUAL(Test_rtp_source, packet.rtp()->source_id);
         UNSIGNED_LONGS_EQUAL(Test_rtp_seqnum, packet.rtp()->seqnum);
         UNSIGNED_LONGS_EQUAL(Test_rtp_timestamp, packet.rtp()->stream_timestamp);
         UNSIGNED_LONGS_EQUAL(Test_rtp_pt, packet.rtp()->payload_type);
@@ -163,7 +163,7 @@ void check_packet(packet::Packet& packet,
 }
 
 void test_compose(const PacketTest& test) {
-    core::Slice<uint8_t> buffer = buffer_factory.new_buffer();
+    core::Slice<uint8_t> buffer = packet_factory.new_packet_buffer();
     CHECK(buffer);
 
     packet::PacketPtr packet = packet_factory.new_packet();
@@ -171,20 +171,20 @@ void test_compose(const PacketTest& test) {
 
     CHECK(test.composer->prepare(*packet, buffer, Test_payload_size));
 
-    packet->set_data(buffer);
+    packet->set_buffer(buffer);
 
     fill_packet(*packet, test.is_rtp);
 
     CHECK(test.composer->compose(*packet));
 
-    UNSIGNED_LONGS_EQUAL(test.reference_size, packet->data().size());
+    UNSIGNED_LONGS_EQUAL(test.reference_size, packet->buffer().size());
     for (size_t i = 0; i < test.reference_size; i++) {
-        UNSIGNED_LONGS_EQUAL(test.reference[i], packet->data().data()[i]);
+        UNSIGNED_LONGS_EQUAL(test.reference[i], packet->buffer().data()[i]);
     }
 }
 
 void test_parse(const PacketTest& test) {
-    core::Slice<uint8_t> buffer = buffer_factory.new_buffer();
+    core::Slice<uint8_t> buffer = packet_factory.new_packet_buffer();
     CHECK(buffer);
 
     buffer.reslice(0, test.reference_size);
@@ -195,15 +195,15 @@ void test_parse(const PacketTest& test) {
     packet::PacketPtr packet = packet_factory.new_packet();
     CHECK(packet);
 
-    packet->set_data(buffer);
+    packet->set_buffer(buffer);
 
-    CHECK(test.parser->parse(*packet, packet->data()));
+    CHECK(test.parser->parse(*packet, packet->buffer()));
 
     check_packet(*packet, test.scheme, test.block_length, test.is_rtp);
 }
 
 void test_compose_parse(const PacketTest& test) {
-    core::Slice<uint8_t> buffer = buffer_factory.new_buffer();
+    core::Slice<uint8_t> buffer = packet_factory.new_packet_buffer();
     CHECK(buffer);
 
     packet::PacketPtr packet1 = packet_factory.new_packet();
@@ -211,7 +211,7 @@ void test_compose_parse(const PacketTest& test) {
 
     CHECK(test.composer->prepare(*packet1, buffer, Test_payload_size));
 
-    packet1->set_data(buffer);
+    packet1->set_buffer(buffer);
 
     fill_packet(*packet1, test.is_rtp);
 
@@ -220,7 +220,7 @@ void test_compose_parse(const PacketTest& test) {
     packet::PacketPtr packet2 = packet_factory.new_packet();
     CHECK(packet2);
 
-    CHECK(test.parser->parse(*packet2, packet1->data()));
+    CHECK(test.parser->parse(*packet2, packet1->buffer()));
 
     check_packet(*packet2, test.scheme, test.block_length, test.is_rtp);
 }
@@ -239,8 +239,8 @@ TEST(composer_parser, rtp_ldpc_source) {
     rtp::Composer rtp_composer(NULL);
     Composer<LDPC_Source_PayloadID, Source, Footer> ldpc_composer(&rtp_composer);
 
-    rtp::FormatMap rtp_format_map(arena);
-    rtp::Parser rtp_parser(rtp_format_map, NULL);
+    rtp::EncodingMap rtp_encoding_map(arena);
+    rtp::Parser rtp_parser(rtp_encoding_map, NULL);
     Parser<LDPC_Source_PayloadID, Source, Footer> ldpc_parser(&rtp_parser);
 
     PacketTest test;
@@ -275,8 +275,8 @@ TEST(composer_parser, rtp_rs8m_source) {
     rtp::Composer rtp_composer(NULL);
     Composer<RS8M_PayloadID, Source, Footer> rs8m_composer(&rtp_composer);
 
-    rtp::FormatMap rtp_format_map(arena);
-    rtp::Parser rtp_parser(rtp_format_map, NULL);
+    rtp::EncodingMap rtp_encoding_map(arena);
+    rtp::Parser rtp_parser(rtp_encoding_map, NULL);
     Parser<RS8M_PayloadID, Source, Footer> rs8m_parser(&rtp_parser);
 
     PacketTest test;

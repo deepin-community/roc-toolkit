@@ -7,11 +7,10 @@
  */
 
 #include "roc_address/io_uri.h"
-#include "roc_audio/resampler_profile.h"
 #include "roc_core/crash_handler.h"
 #include "roc_core/heap_arena.h"
 #include "roc_core/log.h"
-#include "roc_core/parse_duration.h"
+#include "roc_core/parse_units.h"
 #include "roc_core/scoped_ptr.h"
 #include "roc_pipeline/transcoder_sink.h"
 #include "roc_sndio/backend_dispatcher.h"
@@ -25,8 +24,8 @@
 using namespace roc;
 
 int main(int argc, char** argv) {
-    core::HeapArena::set_flags(core::DefaultHeapArenaFlags
-                               | core::HeapArenaFlag_EnableLeakDetection);
+    core::HeapArena::set_guards(core::HeapArena_DefaultGuards
+                                | core::HeapArena_LeakGuard);
 
     core::CrashHandler crash_handler;
 
@@ -73,15 +72,13 @@ int main(int argc, char** argv) {
         transcoder_config.input_sample_spec.channel_set());
     source_config.sample_spec.set_sample_rate(0);
 
-    if (args.frame_length_given) {
-        if (!core::parse_duration(args.frame_length_arg, source_config.frame_length)) {
-            roc_log(LogError, "invalid --frame-length: bad format");
+    if (args.frame_len_given) {
+        if (!core::parse_duration(args.frame_len_arg, source_config.frame_length)) {
+            roc_log(LogError, "invalid --frame-len: bad format");
             return 1;
         }
-        if (transcoder_config.input_sample_spec.ns_2_samples_overall(
-                source_config.frame_length)
-            <= 0) {
-            roc_log(LogError, "invalid --frame-length: should be > 0");
+        if (source_config.frame_length <= 0) {
+            roc_log(LogError, "invalid --frame-len: should be > 0");
             return 1;
         }
     }
@@ -89,10 +86,10 @@ int main(int argc, char** argv) {
     sndio::BackendMap::instance().set_frame_size(source_config.frame_length,
                                                  transcoder_config.input_sample_spec);
 
-    core::BufferFactory<audio::sample_t> buffer_factory(
-        arena,
-        transcoder_config.input_sample_spec.ns_2_samples_overall(
-            source_config.frame_length));
+    core::SlabPool<core::Buffer> frame_buffer_pool(
+        "frame_buffer_pool", arena,
+        sizeof(core::Buffer)
+            + transcoder_config.input_sample_spec.ns_2_bytes(source_config.frame_length));
 
     address::IoUri input_uri(arena);
     if (args.input_given) {
@@ -136,16 +133,16 @@ int main(int argc, char** argv) {
 
     switch (args.resampler_backend_arg) {
     case resampler_backend_arg_default:
-        transcoder_config.resampler_backend = audio::ResamplerBackend_Default;
+        transcoder_config.resampler.backend = audio::ResamplerBackend_Default;
         break;
     case resampler_backend_arg_builtin:
-        transcoder_config.resampler_backend = audio::ResamplerBackend_Builtin;
+        transcoder_config.resampler.backend = audio::ResamplerBackend_Builtin;
         break;
     case resampler_backend_arg_speex:
-        transcoder_config.resampler_backend = audio::ResamplerBackend_Speex;
+        transcoder_config.resampler.backend = audio::ResamplerBackend_Speex;
         break;
     case resampler_backend_arg_speexdec:
-        transcoder_config.resampler_backend = audio::ResamplerBackend_SpeexDec;
+        transcoder_config.resampler.backend = audio::ResamplerBackend_SpeexDec;
         break;
     default:
         break;
@@ -153,13 +150,13 @@ int main(int argc, char** argv) {
 
     switch (args.resampler_profile_arg) {
     case resampler_profile_arg_low:
-        transcoder_config.resampler_profile = audio::ResamplerProfile_Low;
+        transcoder_config.resampler.profile = audio::ResamplerProfile_Low;
         break;
     case resampler_profile_arg_medium:
-        transcoder_config.resampler_profile = audio::ResamplerProfile_Medium;
+        transcoder_config.resampler.profile = audio::ResamplerProfile_Medium;
         break;
     case resampler_profile_arg_high:
-        transcoder_config.resampler_profile = audio::ResamplerProfile_High;
+        transcoder_config.resampler.profile = audio::ResamplerProfile_High;
         break;
     default:
         break;
@@ -207,14 +204,14 @@ int main(int argc, char** argv) {
         output_writer = output_sink.get();
     }
 
-    pipeline::TranscoderSink transcoder(transcoder_config, output_writer, buffer_factory,
-                                        arena);
+    pipeline::TranscoderSink transcoder(transcoder_config, output_writer,
+                                        frame_buffer_pool, arena);
     if (!transcoder.is_valid()) {
         roc_log(LogError, "can't create transcoder pipeline");
         return 1;
     }
 
-    sndio::Pump pump(buffer_factory, *input_source, NULL, transcoder,
+    sndio::Pump pump(frame_buffer_pool, *input_source, NULL, transcoder,
                      source_config.frame_length, transcoder_config.input_sample_spec,
                      sndio::Pump::ModePermanent);
     if (!pump.is_valid()) {

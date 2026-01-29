@@ -16,7 +16,7 @@ namespace audio {
 
 ProfilingReader::ProfilingReader(IFrameReader& reader,
                                  core::IArena& arena,
-                                 const audio::SampleSpec& sample_spec,
+                                 const SampleSpec& sample_spec,
                                  ProfilerConfig profiler_config)
     : profiler_(arena, sample_spec, profiler_config)
     , reader_(reader) {
@@ -31,7 +31,7 @@ bool ProfilingReader::read(Frame& frame) {
     const core::nanoseconds_t elapsed = read_(frame, ret);
 
     if (ret) {
-        profiler_.add_frame(frame.num_samples(), elapsed);
+        profiler_.add_frame(frame.duration(), elapsed);
     }
     return ret;
 }

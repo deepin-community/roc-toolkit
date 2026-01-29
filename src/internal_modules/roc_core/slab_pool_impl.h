@@ -64,13 +64,10 @@ public:
                  size_t max_alloc_bytes,
                  void* preallocated_data,
                  size_t preallocated_size,
-                 size_t flags);
+                 size_t guards);
 
     //! Deinitialize.
     ~SlabPoolImpl();
-
-    //! Get size of objects in pool.
-    size_t object_size() const;
 
     //! Reserve memory for given number of objects.
     ROC_ATTR_NODISCARD bool reserve(size_t n_objects);
@@ -81,12 +78,18 @@ public:
     //! Return memory to pool.
     void deallocate(void* memory);
 
+    //! Get size of the allocation per object.
+    size_t allocation_size() const;
+
+    //! Get size of the object.
+    size_t object_size() const;
+
     //! Get number of guard failures.
     size_t num_guard_failures() const;
 
 private:
-    struct Slab : ListNode {};
-    struct Slot : ListNode {};
+    struct Slab : ListNode<> {};
+    struct Slot : ListNode<> {};
 
     void* give_slot_to_user_(Slot* slot);
     Slot* take_slot_from_user_(void* memory);
@@ -103,6 +106,8 @@ private:
 
     size_t slots_per_slab_(size_t slab_size, bool round_up) const;
     size_t slot_offset_(size_t slot_index) const;
+
+    bool report_guard_(size_t guard) const;
 
     Mutex mutex_;
 
@@ -126,8 +131,8 @@ private:
     const size_t object_size_;
     const size_t object_size_padding_;
 
-    const size_t flags_;
-    size_t num_guard_failures_;
+    const size_t guards_;
+    mutable size_t num_guard_failures_;
 };
 
 } // namespace core

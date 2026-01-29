@@ -66,20 +66,22 @@ class Profiler : public core::NonCopyable<> {
 public:
     //! Initialization.
     Profiler(core::IArena& arena,
-             const audio::SampleSpec& sample_spec,
+             const SampleSpec& sample_spec,
              ProfilerConfig profiler_config);
 
     //! Check if the profiler was succefully constructed.
     bool is_valid() const;
 
     //! Profile frame speed.
-    void add_frame(size_t frame_size, core::nanoseconds_t elapsed);
+    void add_frame(packet::stream_timestamp_t frame_duration,
+                   core::nanoseconds_t elapsed);
 
     //! Get computed average.
     float get_moving_avg();
 
 private:
-    void update_moving_avg_(size_t frame_size, core::nanoseconds_t elapsed);
+    void update_moving_avg_(packet::stream_timestamp_t frame_duration,
+                            core::nanoseconds_t elapsed);
 
     core::RateLimiter rate_limiter_;
 
@@ -94,7 +96,7 @@ private:
 
     float moving_avg_;
 
-    const audio::SampleSpec sample_spec_;
+    const SampleSpec sample_spec_;
 
     bool valid_;
     bool buffer_full_;

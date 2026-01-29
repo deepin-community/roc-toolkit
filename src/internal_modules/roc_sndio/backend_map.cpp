@@ -7,16 +7,19 @@
  */
 
 #include "roc_sndio/backend_map.h"
+#include "roc_core/noop_arena.h"
 #include "roc_core/panic.h"
 
 namespace roc {
 namespace sndio {
 
-BackendMap::BackendMap() {
+BackendMap::BackendMap()
+    : backends_(core::NoopArena)
+    , drivers_(core::NoopArena) {
     register_backends_();
     register_drivers_();
 
-    roc_log(LogDebug, "backend map: initialized: n_backends=%d n_drivers=%d",
+    roc_log(LogDebug, "backend map: initializing: n_backends=%d n_drivers=%d",
             (int)backends_.size(), (int)drivers_.size());
 }
 
@@ -41,6 +44,7 @@ void BackendMap::set_frame_size(core::nanoseconds_t frame_length,
 #ifdef ROC_TARGET_SOX
     sox_backend_->set_frame_size(frame_length, sample_spec);
 #endif // ROC_TARGET_SOX
+
     (void)frame_length;
     (void)sample_spec;
 }
@@ -50,6 +54,15 @@ void BackendMap::register_backends_() {
     pulseaudio_backend_.reset(new (pulseaudio_backend_) PulseaudioBackend);
     add_backend_(pulseaudio_backend_.get());
 #endif // ROC_TARGET_PULSEAUDIO
+
+#ifdef ROC_TARGET_SNDFILE
+    sndfile_backend_.reset(new (sndfile_backend_) SndfileBackend);
+    add_backend_(sndfile_backend_.get());
+#endif // ROC_TARGET_SNDFILE
+
+    wav_backend_.reset(new (wav_backend_) WavBackend);
+    add_backend_(wav_backend_.get());
+
 #ifdef ROC_TARGET_SOX
     sox_backend_.reset(new (sox_backend_) SoxBackend);
     add_backend_(sox_backend_.get());

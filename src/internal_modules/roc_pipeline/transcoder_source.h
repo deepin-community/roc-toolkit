@@ -13,13 +13,11 @@
 #define ROC_PIPELINE_TRANSCODER_SOURCE_H_
 
 #include "roc_audio/channel_mapper_reader.h"
+#include "roc_audio/frame_factory.h"
 #include "roc_audio/iresampler.h"
-#include "roc_audio/poison_reader.h"
 #include "roc_audio/profiling_reader.h"
-#include "roc_audio/resampler_map.h"
-#include "roc_audio/resampler_profile.h"
 #include "roc_audio/resampler_reader.h"
-#include "roc_core/buffer_factory.h"
+#include "roc_core/ipool.h"
 #include "roc_core/optional.h"
 #include "roc_core/scoped_ptr.h"
 #include "roc_pipeline/config.h"
@@ -37,11 +35,17 @@ public:
     //! Initialize.
     TranscoderSource(const TranscoderConfig& config,
                      sndio::ISource& input_source,
-                     core::BufferFactory<audio::sample_t>& buffer_factory,
+                     core::IPool& buffer_pool,
                      core::IArena& arena);
 
     //! Check if the pipeline was successfully constructed.
     bool is_valid();
+
+    //! Cast IDevice to ISink.
+    virtual sndio::ISink* to_sink();
+
+    //! Cast IDevice to ISink.
+    virtual sndio::ISource* to_source();
 
     //! Get device type.
     virtual sndio::DeviceType type() const;
@@ -77,19 +81,21 @@ public:
     virtual bool read(audio::Frame&);
 
 private:
+    audio::FrameFactory frame_factory_;
+
     core::Optional<audio::ChannelMapperReader> channel_mapper_reader_;
 
-    core::Optional<audio::PoisonReader> resampler_poisoner_;
     core::Optional<audio::ResamplerReader> resampler_reader_;
     core::SharedPtr<audio::IResampler> resampler_;
 
-    core::Optional<audio::PoisonReader> pipeline_poisoner_;
     core::Optional<audio::ProfilingReader> profiler_;
 
     sndio::ISource& input_source_;
-    audio::IFrameReader* audio_reader_;
+    audio::IFrameReader* frame_reader_;
 
     TranscoderConfig config_;
+
+    bool valid_;
 };
 
 } // namespace pipeline

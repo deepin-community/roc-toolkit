@@ -7,6 +7,7 @@
  */
 
 #include "roc_node/sender_encoder.h"
+#include "roc_address/interface.h"
 #include "roc_core/log.h"
 #include "roc_core/panic.h"
 #include "roc_pipeline/metrics.h"
@@ -16,14 +17,15 @@ namespace roc {
 namespace node {
 
 SenderEncoder::SenderEncoder(Context& context,
-                             const pipeline::SenderConfig& pipeline_config)
+                             const pipeline::SenderSinkConfig& pipeline_config)
     : Node(context)
+    , packet_factory_(context.packet_pool(), context.packet_buffer_pool())
     , pipeline_(*this,
                 pipeline_config,
-                context.format_map(),
-                context.packet_factory(),
-                context.byte_buffer_factory(),
-                context.sample_buffer_factory(),
+                context.encoding_map(),
+                context.packet_pool(),
+                context.packet_buffer_pool(),
+                context.frame_buffer_pool(),
                 context.arena())
     , slot_(NULL)
     , processing_task_(pipeline_)
@@ -35,7 +37,9 @@ SenderEncoder::SenderEncoder(Context& context,
         return;
     }
 
-    pipeline::SenderLoop::Tasks::CreateSlot slot_task;
+    pipeline::SenderSlotConfig slot_config;
+
+    pipeline::SenderLoop::Tasks::CreateSlot slot_task(slot_config);
     if (!pipeline_.schedule_and_wait(slot_task)) {
         roc_log(LogError, "sender encoder node: failed to create slot");
         return;
@@ -70,6 +74,10 @@ bool SenderEncoder::is_valid() const {
     return valid_;
 }
 
+packet::PacketFactory& SenderEncoder::packet_factory() {
+    return packet_factory_;
+}
+
 bool SenderEncoder::activate(address::Interface iface, address::Protocol proto) {
     core::Mutex::Lock lock(mutex_);
 
@@ -81,7 +89,7 @@ bool SenderEncoder::activate(address::Interface iface, address::Protocol proto) 
     roc_log(LogInfo, "sender encoder node: activating %s interface with protocol %s",
             address::interface_to_str(iface), address::proto_to_str(proto));
 
-    if (endpoint_readers_[iface]) {
+    if (endpoint_readers_[iface] || endpoint_writers_[iface]) {
         roc_log(LogError,
                 "sender encoder node:"
                 " can't activate %s interface: interface already activated",
@@ -92,8 +100,8 @@ bool SenderEncoder::activate(address::Interface iface, address::Protocol proto) 
     endpoint_queues_[iface].reset(new (endpoint_queues_[iface]) packet::ConcurrentQueue(
         packet::ConcurrentQueue::NonBlocking));
 
-    pipeline::SenderLoop::Tasks::AddEndpoint endpoint_task(slot_, iface, proto, address_,
-                                                           *endpoint_queues_[iface]);
+    pipeline::SenderLoop::Tasks::AddEndpoint endpoint_task(
+        slot_, iface, proto, dest_address_, *endpoint_queues_[iface]);
     if (!pipeline_.schedule_and_wait(endpoint_task)) {
         roc_log(LogError,
                 "sender encoder node:"
@@ -104,21 +112,43 @@ bool SenderEncoder::activate(address::Interface iface, address::Protocol proto) 
 
     endpoint_readers_[iface] = endpoint_queues_[iface].get();
 
+    if (iface == address::Iface_AudioControl) {
+        endpoint_writers_[iface] = endpoint_task.get_inbound_writer();
+    }
+
     return true;
 }
 
-bool SenderEncoder::get_metrics(pipeline::SenderSlotMetrics& slot_metrics,
-                                pipeline::SenderSessionMetrics& sess_metrics) {
+bool SenderEncoder::get_metrics(slot_metrics_func_t slot_metrics_func,
+                                void* slot_metrics_arg,
+                                party_metrics_func_t party_metrics_func,
+                                void* party_metrics_arg) {
     core::Mutex::Lock lock(mutex_);
 
     roc_panic_if_not(is_valid());
 
-    pipeline::SenderLoop::Tasks::QuerySlot task(slot_, slot_metrics, &sess_metrics);
+    roc_panic_if(!slot_metrics_func);
+    roc_panic_if(!party_metrics_func);
+
+    pipeline::SenderSlotMetrics slot_metrics;
+    pipeline::SenderParticipantMetrics party_metrics;
+    size_t party_metrics_size = 1;
+
+    pipeline::SenderLoop::Tasks::QuerySlot task(slot_, slot_metrics, &party_metrics,
+                                                &party_metrics_size);
     if (!pipeline_.schedule_and_wait(task)) {
         roc_log(LogError,
                 "sender encoder node:"
                 " can't get metrics: operation failed");
         return false;
+    }
+
+    if (slot_metrics_arg) {
+        slot_metrics_func(slot_metrics, slot_metrics_arg);
+    }
+
+    if (party_metrics_arg) {
+        party_metrics_func(party_metrics, 0, party_metrics_arg);
     }
 
     return true;
@@ -130,7 +160,7 @@ bool SenderEncoder::is_complete() {
     roc_panic_if_not(is_valid());
 
     pipeline::SenderSlotMetrics slot_metrics;
-    pipeline::SenderLoop::Tasks::QuerySlot task(slot_, slot_metrics, NULL);
+    pipeline::SenderLoop::Tasks::QuerySlot task(slot_, slot_metrics, NULL, NULL);
     if (!pipeline_.schedule_and_wait(task)) {
         return false;
     }
@@ -138,8 +168,8 @@ bool SenderEncoder::is_complete() {
     return slot_metrics.is_complete;
 }
 
-status::StatusCode SenderEncoder::read(address::Interface iface,
-                                       packet::PacketPtr& packet) {
+status::StatusCode SenderEncoder::read_packet(address::Interface iface,
+                                              packet::PacketPtr& packet) {
     roc_panic_if_not(is_valid());
 
     roc_panic_if(iface < 0);
@@ -156,6 +186,35 @@ status::StatusCode SenderEncoder::read(address::Interface iface,
     }
 
     return reader->read(packet);
+}
+
+status::StatusCode SenderEncoder::write_packet(address::Interface iface,
+                                               const packet::PacketPtr& packet) {
+    roc_panic_if_not(is_valid());
+
+    roc_panic_if(iface < 0);
+    roc_panic_if(iface >= (int)address::Iface_Max);
+
+    packet::IWriter* writer = endpoint_writers_[iface];
+    if (!writer) {
+        if (!endpoint_readers_[iface]) {
+            roc_log(LogError,
+                    "sender encoder node:"
+                    " can't write to %s interface: interface not activated",
+                    address::interface_to_str(iface));
+            // TODO(gh-183): return StatusNotFound
+            return status::StatusUnknown;
+        } else {
+            roc_log(LogError,
+                    "sender encoder node:"
+                    " can't write to %s interface: interface doesn't support writing",
+                    address::interface_to_str(iface));
+            // TODO(gh-183): return StatusBadOperation
+            return status::StatusUnknown;
+        }
+    }
+
+    return writer->write(packet);
 }
 
 sndio::ISink& SenderEncoder::sink() {

@@ -11,7 +11,6 @@
 #include "test_helpers/mock_reader.h"
 
 #include "roc_audio/channel_mapper_reader.h"
-#include "roc_core/buffer_factory.h"
 #include "roc_core/heap_arena.h"
 #include "roc_core/stddefs.h"
 #include "roc_core/time.h"
@@ -26,7 +25,7 @@ const double Epsilon = 0.00001;
 enum { MaxSz = 500 };
 
 core::HeapArena arena;
-core::BufferFactory<sample_t> buffer_factory(arena, MaxSz);
+FrameFactory frame_factory(arena, MaxSz * sizeof(sample_t));
 
 void add_mono(test::MockReader& mock_reader,
               size_t size,
@@ -54,20 +53,20 @@ void add_stereo(test::MockReader& mock_reader,
 }
 
 void expect_mono(const Frame& frame, sample_t value) {
-    CHECK(frame.num_samples() > 0);
+    CHECK(frame.num_raw_samples() > 0);
 
-    for (size_t n = 0; n < frame.num_samples(); n++) {
-        DOUBLES_EQUAL((double)value, (double)frame.samples()[n], Epsilon);
+    for (size_t n = 0; n < frame.num_raw_samples(); n++) {
+        DOUBLES_EQUAL((double)value, (double)frame.raw_samples()[n], Epsilon);
     }
 }
 
 void expect_stereo(const Frame& frame, sample_t left_value, sample_t right_value) {
-    CHECK(frame.num_samples() > 0);
-    CHECK(frame.num_samples() % 2 == 0);
+    CHECK(frame.num_raw_samples() > 0);
+    CHECK(frame.num_raw_samples() % 2 == 0);
 
-    for (size_t n = 0; n < frame.num_samples(); n += 2) {
-        DOUBLES_EQUAL((double)left_value, (double)frame.samples()[n + 0], Epsilon);
-        DOUBLES_EQUAL((double)right_value, (double)frame.samples()[n + 1], Epsilon);
+    for (size_t n = 0; n < frame.num_raw_samples(); n += 2) {
+        DOUBLES_EQUAL((double)left_value, (double)frame.raw_samples()[n + 0], Epsilon);
+        DOUBLES_EQUAL((double)right_value, (double)frame.raw_samples()[n + 1], Epsilon);
     }
 }
 
@@ -78,17 +77,17 @@ TEST_GROUP(channel_mapper_reader) {};
 TEST(channel_mapper_reader, small_frame_upmix) {
     enum { FrameSz = MaxSz / 2 };
 
-    const SampleSpec in_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                             ChanMask_Surround_Mono);
-    const SampleSpec out_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                              ChanMask_Surround_Stereo);
+    const SampleSpec in_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                             ChanOrder_Smpte, ChanMask_Surround_Mono);
+    const SampleSpec out_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                              ChanOrder_Smpte, ChanMask_Surround_Stereo);
 
     const core::nanoseconds_t start_ts = 1000000;
 
     test::MockReader mock_reader;
-    ChannelMapperReader mapper_reader(mock_reader, buffer_factory, in_spec, out_spec);
+    ChannelMapperReader mapper_reader(mock_reader, frame_factory, in_spec, out_spec);
 
-    const unsigned flags = Frame::FlagIncomplete;
+    const unsigned flags = Frame::FlagNotComplete;
 
     mock_reader.enable_timestamps(start_ts, in_spec);
     add_mono(mock_reader, FrameSz / 2, 0.3f, flags);
@@ -110,17 +109,17 @@ TEST(channel_mapper_reader, small_frame_upmix) {
 TEST(channel_mapper_reader, small_frame_downmix) {
     enum { FrameSz = MaxSz / 2 };
 
-    const SampleSpec in_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                             ChanMask_Surround_Stereo);
-    const SampleSpec out_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                              ChanMask_Surround_Mono);
+    const SampleSpec in_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                             ChanOrder_Smpte, ChanMask_Surround_Stereo);
+    const SampleSpec out_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                              ChanOrder_Smpte, ChanMask_Surround_Mono);
 
     const core::nanoseconds_t start_ts = 1000000;
 
     test::MockReader mock_reader;
-    ChannelMapperReader mapper_reader(mock_reader, buffer_factory, in_spec, out_spec);
+    ChannelMapperReader mapper_reader(mock_reader, frame_factory, in_spec, out_spec);
 
-    const unsigned flags = Frame::FlagIncomplete;
+    const unsigned flags = Frame::FlagNotComplete;
 
     mock_reader.enable_timestamps(start_ts, in_spec);
     add_stereo(mock_reader, FrameSz * 2, 0.2f, 0.4f, flags);
@@ -142,15 +141,15 @@ TEST(channel_mapper_reader, small_frame_downmix) {
 TEST(channel_mapper_reader, small_frame_nocts) {
     enum { FrameSz = MaxSz / 2 };
 
-    const SampleSpec in_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                             ChanMask_Surround_Stereo);
-    const SampleSpec out_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                              ChanMask_Surround_Mono);
+    const SampleSpec in_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                             ChanOrder_Smpte, ChanMask_Surround_Stereo);
+    const SampleSpec out_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                              ChanOrder_Smpte, ChanMask_Surround_Mono);
 
     test::MockReader mock_reader;
-    ChannelMapperReader mapper_reader(mock_reader, buffer_factory, in_spec, out_spec);
+    ChannelMapperReader mapper_reader(mock_reader, frame_factory, in_spec, out_spec);
 
-    const unsigned flags = Frame::FlagIncomplete;
+    const unsigned flags = Frame::FlagNotComplete;
 
     add_stereo(mock_reader, FrameSz * 2, 0.2f, 0.4f, flags);
 
@@ -171,18 +170,18 @@ TEST(channel_mapper_reader, small_frame_nocts) {
 TEST(channel_mapper_reader, large_frame_upmix) {
     enum { FrameSz = MaxSz * 4 };
 
-    const SampleSpec in_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                             ChanMask_Surround_Mono);
-    const SampleSpec out_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                              ChanMask_Surround_Stereo);
+    const SampleSpec in_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                             ChanOrder_Smpte, ChanMask_Surround_Mono);
+    const SampleSpec out_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                              ChanOrder_Smpte, ChanMask_Surround_Stereo);
 
     const core::nanoseconds_t start_ts = 1000000;
 
     test::MockReader mock_reader;
-    ChannelMapperReader mapper_reader(mock_reader, buffer_factory, in_spec, out_spec);
+    ChannelMapperReader mapper_reader(mock_reader, frame_factory, in_spec, out_spec);
 
-    const unsigned flags1 = Frame::FlagIncomplete;
-    const unsigned flags2 = Frame::FlagDrops;
+    const unsigned flags1 = Frame::FlagNotComplete;
+    const unsigned flags2 = Frame::FlagPacketDrops;
 
     mock_reader.enable_timestamps(start_ts, in_spec);
     add_mono(mock_reader, MaxSz, 0.3f, flags1);
@@ -205,18 +204,18 @@ TEST(channel_mapper_reader, large_frame_upmix) {
 TEST(channel_mapper_reader, large_frame_downmix) {
     enum { FrameSz = MaxSz };
 
-    const SampleSpec in_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                             ChanMask_Surround_Stereo);
-    const SampleSpec out_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                              ChanMask_Surround_Mono);
+    const SampleSpec in_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                             ChanOrder_Smpte, ChanMask_Surround_Stereo);
+    const SampleSpec out_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                              ChanOrder_Smpte, ChanMask_Surround_Mono);
 
     const core::nanoseconds_t start_ts = 1000000;
 
     test::MockReader mock_reader;
-    ChannelMapperReader mapper_reader(mock_reader, buffer_factory, in_spec, out_spec);
+    ChannelMapperReader mapper_reader(mock_reader, frame_factory, in_spec, out_spec);
 
-    const unsigned flags1 = Frame::FlagIncomplete;
-    const unsigned flags2 = Frame::FlagDrops;
+    const unsigned flags1 = Frame::FlagNotComplete;
+    const unsigned flags2 = Frame::FlagPacketDrops;
 
     mock_reader.enable_timestamps(start_ts, in_spec);
     add_stereo(mock_reader, MaxSz, 0.2f, 0.4f, flags1);
@@ -239,16 +238,16 @@ TEST(channel_mapper_reader, large_frame_downmix) {
 TEST(channel_mapper_reader, large_frame_nocts) {
     enum { FrameSz = MaxSz };
 
-    const SampleSpec in_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                             ChanMask_Surround_Stereo);
-    const SampleSpec out_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                              ChanMask_Surround_Mono);
+    const SampleSpec in_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                             ChanOrder_Smpte, ChanMask_Surround_Stereo);
+    const SampleSpec out_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                              ChanOrder_Smpte, ChanMask_Surround_Mono);
 
     test::MockReader mock_reader;
-    ChannelMapperReader mapper_reader(mock_reader, buffer_factory, in_spec, out_spec);
+    ChannelMapperReader mapper_reader(mock_reader, frame_factory, in_spec, out_spec);
 
-    const unsigned flags1 = Frame::FlagIncomplete;
-    const unsigned flags2 = Frame::FlagDrops;
+    const unsigned flags1 = Frame::FlagNotComplete;
+    const unsigned flags2 = Frame::FlagPacketDrops;
 
     add_stereo(mock_reader, MaxSz, 0.2f, 0.4f, flags1);
     add_stereo(mock_reader, MaxSz, 0.2f, 0.4f, flags2);

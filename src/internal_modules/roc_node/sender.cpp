@@ -8,7 +8,6 @@
 
 #include "roc_node/sender.h"
 #include "roc_address/endpoint_uri_to_str.h"
-#include "roc_address/socket_addr.h"
 #include "roc_address/socket_addr_to_str.h"
 #include "roc_core/log.h"
 #include "roc_core/panic.h"
@@ -16,18 +15,19 @@
 namespace roc {
 namespace node {
 
-Sender::Sender(Context& context, const pipeline::SenderConfig& pipeline_config)
+Sender::Sender(Context& context, const pipeline::SenderSinkConfig& pipeline_config)
     : Node(context)
     , pipeline_(*this,
                 pipeline_config,
-                context.format_map(),
-                context.packet_factory(),
-                context.byte_buffer_factory(),
-                context.sample_buffer_factory(),
+                context.encoding_map(),
+                context.packet_pool(),
+                context.packet_buffer_pool(),
+                context.frame_buffer_pool(),
                 context.arena())
     , processing_task_(pipeline_)
     , slot_pool_("slot_pool", context.arena())
     , slot_map_(context.arena())
+    , party_metrics_(context.arena())
     , valid_(false) {
     roc_log(LogDebug, "sender node: initializing");
 
@@ -61,7 +61,7 @@ bool Sender::is_valid() const {
 
 bool Sender::configure(slot_index_t slot_index,
                        address::Interface iface,
-                       const netio::UdpSenderConfig& config) {
+                       const netio::UdpConfig& config) {
     core::Mutex::Lock lock(mutex_);
 
     roc_panic_if_not(is_valid());
@@ -158,7 +158,6 @@ bool Sender::connect(slot_index_t slot_index,
     }
 
     netio::NetworkLoop::Tasks::ResolveEndpointAddress resolve_task(uri);
-
     if (!context().network_loop().schedule_and_wait(resolve_task)) {
         roc_log(LogError,
                 "sender node:"
@@ -177,14 +176,48 @@ bool Sender::connect(slot_index_t slot_index,
         roc_log(LogError,
                 "sender node:"
                 " can't connect %s interface of slot %lu:"
-                " can't bind to local port",
+                " can't setup local port",
                 address::interface_to_str(iface), (unsigned long)slot_index);
         break_slot_(*slot);
         return false;
     }
 
+    if (!port.handle) {
+        netio::NetworkLoop::Tasks::AddUdpPort port_task(port.config);
+        if (!context().network_loop().schedule_and_wait(port_task)) {
+            roc_log(LogError,
+                    "sender node:"
+                    " can't connect %s interface of slot %lu:"
+                    " can't bind to local port",
+                    address::interface_to_str(iface), (unsigned long)slot_index);
+            break_slot_(*slot);
+            return false;
+        }
+
+        port.handle = port_task.get_handle();
+
+        roc_log(LogInfo, "sender node: bound %s interface to %s",
+                address::interface_to_str(iface),
+                address::socket_addr_to_str(port.config.bind_address).c_str());
+    }
+
+    if (!port.outbound_writer) {
+        netio::NetworkLoop::Tasks::StartUdpSend send_task(port.handle);
+        if (!context().network_loop().schedule_and_wait(send_task)) {
+            roc_log(LogError,
+                    "sender node:"
+                    " can't connect %s interface of slot %lu:"
+                    " can't start sending on local port",
+                    address::interface_to_str(iface), (unsigned long)slot_index);
+            break_slot_(*slot);
+            return false;
+        }
+
+        port.outbound_writer = &send_task.get_outbound_writer();
+    }
+
     pipeline::SenderLoop::Tasks::AddEndpoint endpoint_task(
-        slot->handle, iface, uri.proto(), address, *port.writer);
+        slot->handle, iface, uri.proto(), address, *port.outbound_writer);
     if (!pipeline_.schedule_and_wait(endpoint_task)) {
         roc_log(LogError,
                 "sender node:"
@@ -193,6 +226,20 @@ bool Sender::connect(slot_index_t slot_index,
                 address::interface_to_str(iface), (unsigned long)slot_index);
         break_slot_(*slot);
         return false;
+    }
+
+    if (iface == address::Iface_AudioControl && endpoint_task.get_inbound_writer()) {
+        netio::NetworkLoop::Tasks::StartUdpRecv recv_task(
+            port.handle, *endpoint_task.get_inbound_writer());
+        if (!context().network_loop().schedule_and_wait(recv_task)) {
+            roc_log(LogError,
+                    "sender node:"
+                    " can't connect %s interface of slot %lu:"
+                    " can't start receiving on local port",
+                    address::interface_to_str(iface), (unsigned long)slot_index);
+            break_slot_(*slot);
+            return false;
+        }
     }
 
     update_compatibility_(iface, uri);
@@ -223,11 +270,17 @@ bool Sender::unlink(slot_index_t slot_index) {
 }
 
 bool Sender::get_metrics(slot_index_t slot_index,
-                         pipeline::SenderSlotMetrics& slot_metrics,
-                         pipeline::SenderSessionMetrics& sess_metrics) {
+                         slot_metrics_func_t slot_metrics_func,
+                         void* slot_metrics_arg,
+                         party_metrics_func_t party_metrics_func,
+                         size_t* party_metrics_size,
+                         void* party_metrics_arg) {
     core::Mutex::Lock lock(mutex_);
 
     roc_panic_if_not(is_valid());
+
+    roc_panic_if(!slot_metrics_func);
+    roc_panic_if(!party_metrics_func);
 
     core::SharedPtr<Slot> slot = get_slot_(slot_index, false);
     if (!slot) {
@@ -238,14 +291,36 @@ bool Sender::get_metrics(slot_index_t slot_index,
         return false;
     }
 
-    pipeline::SenderLoop::Tasks::QuerySlot task(slot->handle, slot_metrics,
-                                                &sess_metrics);
+    if (party_metrics_size) {
+        if (!party_metrics_.resize(*party_metrics_size)) {
+            roc_log(LogError,
+                    "sender node:"
+                    " can't get metrics of slot %lu: can't allocate buffer",
+                    (unsigned long)slot_index);
+            return false;
+        }
+    }
+
+    pipeline::SenderLoop::Tasks::QuerySlot task(
+        slot->handle, slot_metrics_,
+        party_metrics_.size() != 0 ? party_metrics_.data() : NULL, party_metrics_size);
     if (!pipeline_.schedule_and_wait(task)) {
         roc_log(LogError,
                 "sender node:"
                 " can't get metrics of slot %lu: operation failed",
                 (unsigned long)slot_index);
         return false;
+    }
+
+    if (slot_metrics_arg) {
+        slot_metrics_func(slot_metrics_, slot_metrics_arg);
+    }
+
+    if (party_metrics_arg && party_metrics_size) {
+        for (size_t party_index = 0; party_index < *party_metrics_size; party_index++) {
+            party_metrics_func(party_metrics_[party_index], party_index,
+                               party_metrics_arg);
+        }
     }
 
     return true;
@@ -264,7 +339,8 @@ bool Sender::has_incomplete() {
 
         if (slot->handle) {
             pipeline::SenderSlotMetrics slot_metrics;
-            pipeline::SenderLoop::Tasks::QuerySlot task(slot->handle, slot_metrics, NULL);
+            pipeline::SenderLoop::Tasks::QuerySlot task(slot->handle, slot_metrics, NULL,
+                                                        NULL);
             if (!pipeline_.schedule_and_wait(task)) {
                 return true;
             }
@@ -324,14 +400,16 @@ core::SharedPtr<Sender::Slot> Sender::get_slot_(slot_index_t slot_index,
 
     if (!slot) {
         if (auto_create) {
-            pipeline::SenderLoop::Tasks::CreateSlot task;
-            if (!pipeline_.schedule_and_wait(task)) {
+            pipeline::SenderSlotConfig slot_config;
+
+            pipeline::SenderLoop::Tasks::CreateSlot slot_task(slot_config);
+            if (!pipeline_.schedule_and_wait(slot_task)) {
                 roc_log(LogError, "sender node: failed to create slot %lu",
                         (unsigned long)slot_index);
                 return NULL;
             }
 
-            slot = new (slot_pool_) Slot(slot_pool_, slot_index, task.get_handle());
+            slot = new (slot_pool_) Slot(slot_pool_, slot_index, slot_task.get_handle());
             if (!slot) {
                 roc_log(LogError, "sender node: failed to create slot %lu",
                         (unsigned long)slot_index);
@@ -395,7 +473,8 @@ Sender::Port& Sender::select_outgoing_port_(Slot& slot,
     // standard nor universal, but in many cases it allows us to work even without
     // protocols like RTCP or RTSP.
     const bool share_interface_ports =
-        (iface == address::Iface_AudioSource || iface == address::Iface_AudioRepair);
+        (iface == address::Iface_AudioSource || iface == address::Iface_AudioRepair
+         || iface == address::Iface_AudioControl);
 
     if (share_interface_ports && !slot.ports[iface].handle) {
         for (size_t i = 0; i < address::Iface_Max; i++) {
@@ -426,7 +505,7 @@ Sender::Port& Sender::select_outgoing_port_(Slot& slot,
 bool Sender::setup_outgoing_port_(Port& port,
                                   address::Interface iface,
                                   address::AddrFamily family) {
-    if (port.config.bind_address.has_host_port()) {
+    if (port.config.bind_address) {
         if (port.config.bind_address.family() != family) {
             roc_log(LogError,
                     "sender node:"
@@ -442,7 +521,7 @@ bool Sender::setup_outgoing_port_(Port& port,
     if (!port.handle) {
         port.orig_config = port.config;
 
-        if (!port.config.bind_address.has_host_port()) {
+        if (!port.config.bind_address) {
             if (family == address::Family_IPv4) {
                 if (!port.config.bind_address.set_host_port(address::Family_IPv4,
                                                             "0.0.0.0", 0)) {
@@ -457,21 +536,6 @@ bool Sender::setup_outgoing_port_(Port& port,
                 }
             }
         }
-
-        netio::NetworkLoop::Tasks::AddUdpSenderPort port_task(port.config);
-
-        if (!context().network_loop().schedule_and_wait(port_task)) {
-            roc_log(LogError, "sender node: can't bind %s interface to local port",
-                    address::interface_to_str(iface));
-            return false;
-        }
-
-        port.handle = port_task.get_handle();
-        port.writer = port_task.get_writer();
-
-        roc_log(LogInfo, "sender node: bound %s interface to %s",
-                address::interface_to_str(iface),
-                address::socket_addr_to_str(port.config.bind_address).c_str());
     }
 
     return true;

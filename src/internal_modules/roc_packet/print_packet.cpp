@@ -8,10 +8,11 @@
 
 #include "roc_packet/print_packet.h"
 #include "roc_address/socket_addr_to_str.h"
-#include "roc_core/print_buffer.h"
+#include "roc_core/print_memory.h"
 #include "roc_core/printer.h"
 #include "roc_packet/fec_scheme_to_str.h"
 #include "roc_packet/packet.h"
+#include "roc_packet/packet_flags_to_str.h"
 
 namespace roc {
 namespace packet {
@@ -19,25 +20,27 @@ namespace packet {
 void print_packet(const Packet& pkt, int flags) {
     core::Printer p;
 
-    p.writef("@ packet [%p]\n", (const void*)&pkt);
+    p.writef("@ packet [%p] %s\n", (const void*)&pkt,
+             packet_flags_to_str(pkt.flags()).c_str());
 
     if (pkt.udp()) {
-        p.writef(" udp: src=%s dst=%s\n",
+        p.writef(" udp: src=%s dst=%s rts=%lld\n",
                  address::socket_addr_to_str(pkt.udp()->src_addr).c_str(),
-                 address::socket_addr_to_str(pkt.udp()->dst_addr).c_str());
+                 address::socket_addr_to_str(pkt.udp()->dst_addr).c_str(),
+                 (long long)pkt.udp()->receive_timestamp);
     }
 
     if (pkt.rtp()) {
         p.writef(
             " rtp: src=%lu m=%d sn=%lu sts=%lu dur=%lu cts=%lld pt=%u payload_sz=%lu\n",
-            (unsigned long)pkt.rtp()->source, (int)pkt.rtp()->marker,
+            (unsigned long)pkt.rtp()->source_id, (int)pkt.rtp()->marker,
             (unsigned long)pkt.rtp()->seqnum, (unsigned long)pkt.rtp()->stream_timestamp,
             (unsigned long)pkt.rtp()->duration, (long long)pkt.rtp()->capture_timestamp,
             (unsigned int)pkt.rtp()->payload_type,
             (unsigned long)pkt.rtp()->payload.size());
 
         if ((flags & PrintPayload) && pkt.rtp()->payload) {
-            core::print_buffer(pkt.rtp()->payload.data(), pkt.rtp()->payload.size());
+            core::print_memory(pkt.rtp()->payload.data(), pkt.rtp()->payload.size());
         }
     }
 
@@ -51,12 +54,12 @@ void print_packet(const Packet& pkt, int flags) {
                  (unsigned long)pkt.fec()->payload.size());
 
         if ((flags & PrintPayload) && pkt.fec()->payload) {
-            core::print_buffer(pkt.fec()->payload.data(), pkt.fec()->payload.size());
+            core::print_memory(pkt.fec()->payload.data(), pkt.fec()->payload.size());
         }
     }
 
     if (pkt.rtcp()) {
-        p.writef(" rtcp: size=%lu\n", (unsigned long)pkt.rtcp()->data.size());
+        p.writef(" rtcp: size=%lu\n", (unsigned long)pkt.rtcp()->payload.size());
     }
 }
 

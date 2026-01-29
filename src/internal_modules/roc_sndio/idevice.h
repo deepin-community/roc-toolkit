@@ -21,10 +21,19 @@
 namespace roc {
 namespace sndio {
 
+class ISink;
+class ISource;
+
 //! Base interface for sinks and sources.
 class IDevice {
 public:
     virtual ~IDevice();
+
+    //! Cast IDevice to ISink.
+    virtual ISink* to_sink() = 0;
+
+    //! Cast IDevice to ISink.
+    virtual ISource* to_source() = 0;
 
     //! Get device type.
     virtual DeviceType type() const = 0;
@@ -37,14 +46,14 @@ public:
 
     //! Resume device after pause.
     //! @returns
-    //!  false if an error occured.
+    //!  false if an error occurred.
     virtual bool resume() = 0;
 
     //! Restart device.
     //! @remarks
     //!  If device was paused, it's automatically resumed.
     //! @returns
-    //!  false if an error occured.
+    //!  false if an error occurred.
     virtual bool restart() = 0;
 
     //! Get sample specification of the device.

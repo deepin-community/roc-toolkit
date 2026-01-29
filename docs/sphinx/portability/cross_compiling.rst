@@ -46,7 +46,7 @@ Here is how you can build Roc with this toolchain using `rocstreaming/toolchain-
 
     $ cd /path/to/roc
     $ docker run -t --rm -u "${UID}" -v "${PWD}:${PWD}" -w "${PWD}" \
-        rocstreaming/toolchain-aarch64-linux-gnu \
+        rocstreaming/toolchain-aarch64-linux-gnu:gcc-7.4 \
           scons \
             --host=aarch64-linux-gnu \
             --build-3rdparty=all
@@ -89,7 +89,7 @@ Here is how you can build Roc with this toolchain using `rocstreaming/toolchain-
 
     $ cd /path/to/roc
     $ docker run -t --rm -u "${UID}" -v "${PWD}:${PWD}" -w "${PWD}" \
-        rocstreaming/toolchain-arm-linux-gnueabihf \
+        rocstreaming/toolchain-arm-linux-gnueabihf:gcc-4.9 \
           scons \
             --host=arm-linux-gnueabihf \
             --build-3rdparty=all
@@ -132,7 +132,7 @@ Here is how you can build Roc with this toolchain using `rocstreaming/toolchain-
 
     $ cd /path/to/roc
     $ docker run -t --rm -u "${UID}" -v "${PWD}:${PWD}" -w "${PWD}" \
-        rocstreaming/toolchain-arm-bcm2708hardfp-linux-gnueabi \
+        rocstreaming/toolchain-arm-bcm2708hardfp-linux-gnueabi:gcc-4.7 \
           scons \
             --host=arm-bcm2708hardfp-linux-gnueabi \
             --build-3rdparty=all
@@ -163,6 +163,30 @@ Alternatively, you can install the toolchain manually:
     # build Roc
     $ cd "${ROC_DIR}"
     $ scons --host=arm-bcm2708hardfp-linux-gnueabi --build-3rdparty=all
+
+.. _mips-openwrt-linux-atheros:
+
+OpenWrt Atheros MIPS32 24Kc toolchains
+======================================
+
+Here is how you can build Roc with prebuilt Artheos OpenWrt toolchains using `rocstreaming/toolchain-mips-openwrt-linux-atheros <https://hub.docker.com/r/rocstreaming/toolchain-mips-openwrt-linux-atheros/>`_ Docker image:
+
+.. code::
+
+    $ cd /path/to/roc
+    $ docker run -t --rm -u "${UID}" -v "${PWD}:${PWD}" -w "${PWD}" \
+        rocstreaming/toolchain-mips-openwrt-linux-atheros:17.01 \
+          scons \
+            --host=mips-openwrt-linux-musl \
+            --build-3rdparty=all \
+            --disable-libunwind \
+            --disable-pulseaudio \
+            --disable-sox
+
+Currently two toolchains are packaged:
+
+* ``17.01`` -- OpenWrt 17.01 / ar71xx / musl (`openwrt archive <https://archive.openwrt.org/releases/17.01.7/targets/ar71xx/generic/>`__)
+* ``12.09`` -- OpenWrt 12.09 / ar71xx / uClibc (`openwrt archive <https://archive.openwrt.org/attitude_adjustment/12.09/ar71xx/generic/>`__)
 
 Debian and Ubuntu toolchains
 ============================
@@ -347,16 +371,16 @@ If PulseAudio support is enabled, install libltdl and libpulse:
 Running cross-compiled tests in QEMU
 ====================================
 
-Running a test on 32-bit ARMv6 CPU using `rocstreaming/toolchain-arm-bcm2708hardfp-linux-gnueabi <https://hub.docker.com/r/rocstreaming/toolchain-arm-bcm2708hardfp-linux-gnueabi/>`_ Docker image:
+Running a test on 64-bit ARMv8 CPU using `rocstreaming/toolchain-aarch64-linux-gnu <https://hub.docker.com/r/rocstreaming/toolchain-aarch64-linux-gnu/>`_ Docker image:
 
 .. code::
 
     $ cd /path/to/roc
     $ docker run -t --rm -u "${UID}" -v "${PWD}:${PWD}" -w "${PWD}" \
-        rocstreaming/toolchain-arm-bcm2708hardfp-linux-gnueabi \
-          env LD_LIBRARY_PATH="/opt/sysroot/lib:${PWD}/3rdparty/arm-bcm2708hardfp-linux-gnueabi/rpath" \
-            qemu-arm -L /opt/sysroot -cpu arm1176 \
-              ./bin/arm-bcm2708hardfp-linux-gnueabi/roc-test-core
+        rocstreaming/toolchain-aarch64-linux-gnu:gcc-7.4 \
+          env LD_LIBRARY_PATH="/opt/sysroot/lib:${PWD}/3rdparty/aarch64-linux-gnu/rpath" \
+            qemu-aarch64 -L /opt/sysroot -cpu cortex-a53 \
+              ./bin/aarch64-linux-gnu/roc-test-core
 
 Running a test on 32-bit ARMv7 CPU using `rocstreaming/toolchain-arm-linux-gnueabihf <https://hub.docker.com/r/rocstreaming/toolchain-arm-linux-gnueabihf/>`_ Docker image:
 
@@ -364,18 +388,18 @@ Running a test on 32-bit ARMv7 CPU using `rocstreaming/toolchain-arm-linux-gnuea
 
     $ cd /path/to/roc
     $ docker run -t --rm -u "${UID}" -v "${PWD}:${PWD}" -w "${PWD}" \
-        rocstreaming/toolchain-arm-linux-gnueabihf \
+        rocstreaming/toolchain-arm-linux-gnueabihf:gcc-4.9 \
           env LD_LIBRARY_PATH="/opt/sysroot/lib:${PWD}/3rdparty/arm-linux-gnueabihf/rpath" \
             qemu-arm -L /opt/sysroot -cpu cortex-a15 \
               ./bin/arm-linux-gnueabihf/roc-test-core
 
-Running a test on 64-bit ARMv8 CPU using `rocstreaming/toolchain-aarch64-linux-gnu <https://hub.docker.com/r/rocstreaming/toolchain-aarch64-linux-gnu/>`_ Docker image:
+Running a test on 32-bit ARMv6 CPU using `rocstreaming/toolchain-arm-bcm2708hardfp-linux-gnueabi <https://hub.docker.com/r/rocstreaming/toolchain-arm-bcm2708hardfp-linux-gnueabi/>`_ Docker image:
 
 .. code::
 
     $ cd /path/to/roc
     $ docker run -t --rm -u "${UID}" -v "${PWD}:${PWD}" -w "${PWD}" \
-        rocstreaming/toolchain-aarch64-linux-gnu \
-          env LD_LIBRARY_PATH="/opt/sysroot/lib:${PWD}/3rdparty/aarch64-linux-gnu/rpath" \
-            qemu-aarch64 -L /opt/sysroot -cpu cortex-a53 \
-              ./bin/aarch64-linux-gnu/roc-test-core
+        rocstreaming/toolchain-arm-bcm2708hardfp-linux-gnueabi:gcc-4.7 \
+          env LD_LIBRARY_PATH="/opt/sysroot/lib:${PWD}/3rdparty/arm-bcm2708hardfp-linux-gnueabi/rpath" \
+            qemu-arm -L /opt/sysroot -cpu arm1176 \
+              ./bin/arm-bcm2708hardfp-linux-gnueabi/roc-test-core

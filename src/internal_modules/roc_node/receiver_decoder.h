@@ -18,6 +18,8 @@
 #include "roc_core/mutex.h"
 #include "roc_node/context.h"
 #include "roc_node/node.h"
+#include "roc_packet/concurrent_queue.h"
+#include "roc_packet/packet_factory.h"
 #include "roc_pipeline/ipipeline_task_scheduler.h"
 #include "roc_pipeline/receiver_loop.h"
 #include "roc_status/status_code.h"
@@ -29,7 +31,8 @@ namespace node {
 class ReceiverDecoder : public Node, private pipeline::IPipelineTaskScheduler {
 public:
     //! Initialize.
-    ReceiverDecoder(Context& context, const pipeline::ReceiverConfig& pipeline_config);
+    ReceiverDecoder(Context& context,
+                    const pipeline::ReceiverSourceConfig& pipeline_config);
 
     //! Deinitialize.
     ~ReceiverDecoder();
@@ -37,27 +40,37 @@ public:
     //! Check if successfully constructed.
     bool is_valid();
 
-    //! Activate interface.
-    bool activate(address::Interface iface, address::Protocol proto);
+    //! Get packet factory.
+    packet::PacketFactory& packet_factory();
 
-    //! Callback for getting session metrics.
-    typedef void (*sess_metrics_func_t)(
-        const pipeline::ReceiverSessionMetrics& sess_metrics,
-        size_t sess_index,
-        void* sess_arg);
+    //! Activate interface.
+    ROC_ATTR_NODISCARD bool activate(address::Interface iface, address::Protocol proto);
+
+    //! Callback for slot metrics.
+    typedef void (*slot_metrics_func_t)(const pipeline::ReceiverSlotMetrics& slot_metrics,
+                                        void* slot_arg);
+
+    //! Callback for participant metrics.
+    typedef void (*party_metrics_func_t)(
+        const pipeline::ReceiverParticipantMetrics& party_metrics,
+        size_t party_index,
+        void* party_arg);
 
     //! Get metrics.
-    //! @remarks
-    //!  Metrics for slot are written into @p slot_metrics.
-    //!  Metrics for each session are passed to @p sess_metrics_func.
-    bool get_metrics(pipeline::ReceiverSlotMetrics& slot_metrics,
-                     sess_metrics_func_t sess_metrics_func,
-                     size_t* sess_metrics_size,
-                     void* sess_metrics_arg);
+    ROC_ATTR_NODISCARD bool get_metrics(slot_metrics_func_t slot_metrics_func,
+                                        void* slot_metrics_arg,
+                                        party_metrics_func_t party_metrics_func,
+                                        void* party_metrics_arg);
 
     //! Write packet for decoding.
-    ROC_ATTR_NODISCARD status::StatusCode write(address::Interface iface,
-                                                const packet::PacketPtr& packet);
+    ROC_ATTR_NODISCARD status::StatusCode write_packet(address::Interface iface,
+                                                       const packet::PacketPtr& packet);
+
+    //! Read encoded packet.
+    //! @note
+    //!  Typically used to generate control packets with feedback for sender.
+    ROC_ATTR_NODISCARD status::StatusCode read_packet(address::Interface iface,
+                                                      packet::PacketPtr& packet);
 
     //! Source for reading decoded frames.
     sndio::ISource& source();
@@ -69,13 +82,17 @@ private:
 
     core::Mutex mutex_;
 
+    address::SocketAddr bind_address_;
+
+    core::Optional<packet::ConcurrentQueue> endpoint_queues_[address::Iface_Max];
+    core::Atomic<packet::IReader*> endpoint_readers_[address::Iface_Max];
     core::Atomic<packet::IWriter*> endpoint_writers_[address::Iface_Max];
+
+    packet::PacketFactory packet_factory_;
 
     pipeline::ReceiverLoop pipeline_;
     pipeline::ReceiverLoop::SlotHandle slot_;
     ctl::ControlLoop::Tasks::PipelineProcessing processing_task_;
-
-    core::Array<pipeline::ReceiverSessionMetrics, 8> sess_metrics_;
 
     bool valid_;
 };

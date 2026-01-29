@@ -10,14 +10,12 @@
 #include "roc_address/io_uri.h"
 #include "roc_address/print_supported.h"
 #include "roc_address/protocol_map.h"
-#include "roc_audio/freq_estimator.h"
-#include "roc_audio/resampler_profile.h"
-#include "roc_core/array.h"
 #include "roc_core/crash_handler.h"
 #include "roc_core/heap_arena.h"
 #include "roc_core/log.h"
-#include "roc_core/parse_duration.h"
+#include "roc_core/parse_units.h"
 #include "roc_core/scoped_ptr.h"
+#include "roc_core/time.h"
 #include "roc_netio/network_loop.h"
 #include "roc_node/context.h"
 #include "roc_node/receiver.h"
@@ -33,8 +31,10 @@
 using namespace roc;
 
 int main(int argc, char** argv) {
-    core::HeapArena::set_flags(core::DefaultHeapArenaFlags
-                               | core::HeapArenaFlag_EnableLeakDetection);
+    core::HeapArena::set_guards(core::HeapArena_DefaultGuards
+                                | core::HeapArena_LeakGuard);
+
+    core::HeapArena heap_arena;
 
     core::CrashHandler crash_handler;
 
@@ -64,25 +64,196 @@ int main(int argc, char** argv) {
         break;
     }
 
+    pipeline::ReceiverSourceConfig receiver_config;
+
+    sndio::Config io_config;
+
+    if (args.frame_len_given) {
+        if (!core::parse_duration(args.frame_len_arg, io_config.frame_length)) {
+            roc_log(LogError, "invalid --frame-len: bad format");
+            return 1;
+        }
+        if (io_config.frame_length <= 0) {
+            roc_log(LogError, "invalid --frame-len: should be > 0");
+            return 1;
+        }
+    }
+
+    if (args.io_latency_given) {
+        if (!core::parse_duration(args.io_latency_arg, io_config.latency)) {
+            roc_log(LogError, "invalid --io-latency: bad format");
+            return 1;
+        }
+        if (io_config.latency <= 0) {
+            roc_log(LogError, "invalid --io-latency: should be > 0");
+            return 1;
+        }
+    }
+
+    // TODO(gh-608): replace --rate with --io-encoding
+    if (args.rate_given) {
+        if (args.rate_arg <= 0) {
+            roc_log(LogError, "invalid --rate: should be > 0");
+            return 1;
+        }
+        io_config.sample_spec.set_sample_rate((size_t)args.rate_arg);
+    }
+
+    // TODO(gh-568): remove set_frame_size() after removing sox
+    sndio::BackendMap::instance().set_frame_size(
+        io_config.frame_length, receiver_config.common.output_sample_spec);
+
+    if (args.target_latency_given) {
+        if (!core::parse_duration(
+                args.target_latency_arg,
+                receiver_config.session_defaults.latency.target_latency)) {
+            roc_log(LogError, "invalid --target-latency: bad format");
+            return 1;
+        }
+        if (receiver_config.session_defaults.latency.target_latency <= 0) {
+            roc_log(LogError, "invalid --target-latency: should be > 0");
+            return 1;
+        }
+    }
+
+    if (args.latency_tolerance_given) {
+        if (!core::parse_duration(
+                args.latency_tolerance_arg,
+                receiver_config.session_defaults.latency.latency_tolerance)) {
+            roc_log(LogError, "invalid --latency-tolerance: bad format");
+            return 1;
+        }
+        if (receiver_config.session_defaults.latency.latency_tolerance <= 0) {
+            roc_log(LogError, "invalid --latency-tolerance: should be > 0");
+            return 1;
+        }
+    }
+
+    if (args.no_play_timeout_given) {
+        if (!core::parse_duration(
+                args.no_play_timeout_arg,
+                receiver_config.session_defaults.watchdog.no_playback_timeout)) {
+            roc_log(LogError, "invalid --no-play-timeout: bad format");
+            return 1;
+        }
+        if (receiver_config.session_defaults.watchdog.no_playback_timeout <= 0) {
+            roc_log(LogError, "invalid --no-play-timeout: should be > 0");
+            return 1;
+        }
+    }
+
+    if (args.choppy_play_timeout_given) {
+        if (!core::parse_duration(
+                args.choppy_play_timeout_arg,
+                receiver_config.session_defaults.watchdog.choppy_playback_timeout)) {
+            roc_log(LogError, "invalid --choppy-play-timeout: bad format");
+            return 1;
+        }
+        if (receiver_config.session_defaults.watchdog.choppy_playback_timeout <= 0) {
+            roc_log(LogError, "invalid --choppy-play-timeout: should be > 0");
+            return 1;
+        }
+    }
+
+    switch (args.latency_backend_arg) {
+    case latency_backend_arg_niq:
+        receiver_config.session_defaults.latency.tuner_backend =
+            audio::LatencyTunerBackend_Niq;
+        break;
+    default:
+        break;
+    }
+
+    switch (args.latency_profile_arg) {
+    case latency_profile_arg_default:
+        receiver_config.session_defaults.latency.tuner_profile =
+            audio::LatencyTunerProfile_Default;
+        break;
+    case latency_profile_arg_responsive:
+        receiver_config.session_defaults.latency.tuner_profile =
+            audio::LatencyTunerProfile_Responsive;
+        break;
+    case latency_profile_arg_gradual:
+        receiver_config.session_defaults.latency.tuner_profile =
+            audio::LatencyTunerProfile_Gradual;
+        break;
+    case latency_profile_arg_intact:
+        receiver_config.session_defaults.latency.tuner_profile =
+            audio::LatencyTunerProfile_Intact;
+        break;
+    default:
+        break;
+    }
+
+    switch (args.resampler_backend_arg) {
+    case resampler_backend_arg_default:
+        receiver_config.session_defaults.resampler.backend =
+            audio::ResamplerBackend_Default;
+        break;
+    case resampler_backend_arg_builtin:
+        receiver_config.session_defaults.resampler.backend =
+            audio::ResamplerBackend_Builtin;
+        break;
+    case resampler_backend_arg_speex:
+        receiver_config.session_defaults.resampler.backend =
+            audio::ResamplerBackend_Speex;
+        break;
+    case resampler_backend_arg_speexdec:
+        receiver_config.session_defaults.resampler.backend =
+            audio::ResamplerBackend_SpeexDec;
+        break;
+    default:
+        break;
+    }
+
+    switch (args.resampler_profile_arg) {
+    case resampler_profile_arg_low:
+        receiver_config.session_defaults.resampler.profile = audio::ResamplerProfile_Low;
+        break;
+    case resampler_profile_arg_medium:
+        receiver_config.session_defaults.resampler.profile =
+            audio::ResamplerProfile_Medium;
+        break;
+    case resampler_profile_arg_high:
+        receiver_config.session_defaults.resampler.profile = audio::ResamplerProfile_High;
+        break;
+
+    default:
+        break;
+    }
+
+    receiver_config.session_defaults.enable_beeping = args.beep_flag;
+    receiver_config.common.enable_profiling = args.profiling_flag;
+
     node::ContextConfig context_config;
 
-    if (args.packet_limit_given) {
-        if (args.packet_limit_arg <= 0) {
-            roc_log(LogError, "invalid --packet-limit: should be > 0");
+    if (args.max_packet_size_given) {
+        if (!core::parse_size(args.max_packet_size_arg, context_config.max_packet_size)) {
+            roc_log(LogError, "invalid --max-packet-size: bad format");
             return 1;
         }
-        context_config.max_packet_size = (size_t)args.packet_limit_arg;
-    }
-
-    if (args.frame_limit_given) {
-        if (args.frame_limit_arg <= 0) {
-            roc_log(LogError, "invalid --frame-limit: should be > 0");
+        if (context_config.max_packet_size == 0) {
+            roc_log(LogError, "invalid --max-packet-size: should be > 0");
             return 1;
         }
-        context_config.max_frame_size = (size_t)args.frame_limit_arg;
     }
 
-    core::HeapArena heap_arena;
+    if (args.max_frame_size_given) {
+        if (!core::parse_size(args.max_frame_size_arg, context_config.max_frame_size)) {
+            roc_log(LogError, "invalid --max-frame-size: bad format");
+            return 1;
+        }
+        if (context_config.max_frame_size == 0) {
+            roc_log(LogError, "invalid --max-frame-size: should be > 0");
+            return 1;
+        }
+    } else {
+        audio::SampleSpec spec = io_config.sample_spec;
+        spec.use_defaults(audio::Sample_RawFormat, audio::ChanLayout_Surround,
+                          audio::ChanOrder_Smpte, audio::ChanMask_Surround_7_1_4, 48000);
+        context_config.max_frame_size =
+            spec.ns_2_samples_overall(io_config.frame_length) * sizeof(audio::sample_t);
+    }
 
     node::Context context(context_config, heap_arena);
     if (!context.is_valid()) {
@@ -93,162 +264,15 @@ int main(int argc, char** argv) {
     sndio::BackendDispatcher backend_dispatcher(context.arena());
 
     if (args.list_supported_given) {
+        if (!address::print_supported(context.arena())) {
+            return 1;
+        }
+
         if (!sndio::print_supported(backend_dispatcher, context.arena())) {
             return 1;
         }
 
-        if (!address::print_supported(address::ProtocolMap::instance(),
-                                      context.arena())) {
-            return 1;
-        }
-
         return 0;
-    }
-
-    pipeline::ReceiverConfig receiver_config;
-
-    sndio::Config io_config;
-    io_config.sample_spec.set_channel_set(
-        receiver_config.common.output_sample_spec.channel_set());
-
-    if (args.frame_length_given) {
-        if (!core::parse_duration(args.frame_length_arg, io_config.frame_length)) {
-            roc_log(LogError, "invalid --frame-length: bad format");
-            return 1;
-        }
-        if (receiver_config.common.output_sample_spec.ns_2_samples_overall(
-                io_config.frame_length)
-            <= 0) {
-            roc_log(LogError, "invalid --frame-length: should be > 0");
-            return 1;
-        }
-    }
-
-    sndio::BackendMap::instance().set_frame_size(
-        io_config.frame_length, receiver_config.common.output_sample_spec);
-
-    if (args.sess_latency_given) {
-        if (!core::parse_duration(args.sess_latency_arg,
-                                  receiver_config.default_session.target_latency)) {
-            roc_log(LogError, "invalid --sess-latency");
-            return 1;
-        }
-    }
-
-    if (args.latency_tolerance_given) {
-        if (!core::parse_duration(
-                args.latency_tolerance_arg,
-                receiver_config.default_session.latency_monitor.latency_tolerance)) {
-            roc_log(LogError, "invalid --latency-tolerance");
-            return 1;
-        }
-    } else {
-        receiver_config.default_session.latency_monitor.deduce_latency_tolerance(
-            receiver_config.default_session.target_latency);
-    }
-
-    if (args.no_play_timeout_given) {
-        if (!core::parse_duration(
-                args.no_play_timeout_arg,
-                receiver_config.default_session.watchdog.no_playback_timeout)) {
-            roc_log(LogError, "invalid --no-play-timeout");
-            return 1;
-        }
-    } else {
-        receiver_config.default_session.watchdog.deduce_no_playback_timeout(
-            receiver_config.default_session.target_latency);
-    }
-
-    if (args.choppy_play_timeout_given) {
-        if (!core::parse_duration(
-                args.choppy_play_timeout_arg,
-                receiver_config.default_session.watchdog.choppy_playback_timeout)) {
-            roc_log(LogError, "invalid --choppy-play-timeout");
-            return 1;
-        }
-        receiver_config.default_session.watchdog.deduce_choppy_playback_window(
-            receiver_config.default_session.watchdog.choppy_playback_timeout);
-    }
-
-    switch (args.clock_backend_arg) {
-    case clock_backend_arg_disable:
-        receiver_config.default_session.latency_monitor.fe_enable = false;
-        break;
-    case clock_backend_arg_niq:
-        receiver_config.default_session.latency_monitor.fe_enable = true;
-        break;
-    default:
-        break;
-    }
-
-    switch (args.clock_profile_arg) {
-    case clock_profile_arg_default:
-        receiver_config.default_session.latency_monitor.deduce_fe_profile(
-            receiver_config.default_session.target_latency);
-        break;
-    case clock_profile_arg_responsive:
-        receiver_config.default_session.latency_monitor.fe_profile =
-            audio::FreqEstimatorProfile_Responsive;
-        break;
-    case clock_profile_arg_gradual:
-        receiver_config.default_session.latency_monitor.fe_profile =
-            audio::FreqEstimatorProfile_Gradual;
-        break;
-    default:
-        break;
-    }
-
-    switch (args.resampler_backend_arg) {
-    case resampler_backend_arg_default:
-        receiver_config.default_session.deduce_resampler_backend();
-        break;
-    case resampler_backend_arg_builtin:
-        receiver_config.default_session.resampler_backend =
-            audio::ResamplerBackend_Builtin;
-        break;
-    case resampler_backend_arg_speex:
-        receiver_config.default_session.resampler_backend = audio::ResamplerBackend_Speex;
-        break;
-    case resampler_backend_arg_speexdec:
-        receiver_config.default_session.resampler_backend =
-            audio::ResamplerBackend_SpeexDec;
-        break;
-    default:
-        break;
-    }
-
-    switch (args.resampler_profile_arg) {
-    case resampler_profile_arg_low:
-        receiver_config.default_session.resampler_profile = audio::ResamplerProfile_Low;
-        break;
-    case resampler_profile_arg_medium:
-        receiver_config.default_session.resampler_profile =
-            audio::ResamplerProfile_Medium;
-        break;
-    case resampler_profile_arg_high:
-        receiver_config.default_session.resampler_profile = audio::ResamplerProfile_High;
-        break;
-
-    default:
-        break;
-    }
-
-    receiver_config.common.enable_profiling = args.profiling_flag;
-    receiver_config.common.enable_beeping = args.beep_flag;
-
-    if (args.io_latency_given) {
-        if (!core::parse_duration(args.io_latency_arg, io_config.latency)) {
-            roc_log(LogError, "invalid --io-latency");
-            return 1;
-        }
-    }
-
-    if (args.rate_given) {
-        if (args.rate_arg <= 0) {
-            roc_log(LogError, "invalid --rate: should be > 0");
-            return 1;
-        }
-        io_config.sample_spec.set_sample_rate((size_t)args.rate_arg);
     }
 
     address::IoUri output_uri(context.arena());
@@ -288,12 +312,11 @@ int main(int argc, char** argv) {
     }
 
     receiver_config.common.enable_timing = !output_sink->has_clock();
-    receiver_config.common.output_sample_spec.set_sample_rate(
-        output_sink->sample_spec().sample_rate());
+    receiver_config.common.output_sample_spec = output_sink->sample_spec();
 
-    if (receiver_config.common.output_sample_spec.sample_rate() == 0) {
+    if (!receiver_config.common.output_sample_spec.is_valid()) {
         roc_log(LogError,
-                "can't detect output sample rate, try to set it "
+                "can't detect output encoding, try to set it "
                 "explicitly with --rate option");
         return 1;
     }
@@ -335,21 +358,23 @@ int main(int argc, char** argv) {
 
         pipeline::TranscoderConfig transcoder_config;
 
-        transcoder_config.resampler_backend =
-            receiver_config.default_session.resampler_backend;
-        transcoder_config.resampler_profile =
-            receiver_config.default_session.resampler_profile;
+        transcoder_config.resampler.backend =
+            receiver_config.session_defaults.resampler.backend;
+        transcoder_config.resampler.profile =
+            receiver_config.session_defaults.resampler.profile;
 
         transcoder_config.input_sample_spec =
             audio::SampleSpec(backup_source->sample_spec().sample_rate(),
+                              receiver_config.common.output_sample_spec.pcm_format(),
                               receiver_config.common.output_sample_spec.channel_set());
         transcoder_config.output_sample_spec =
             audio::SampleSpec(receiver_config.common.output_sample_spec.sample_rate(),
+                              receiver_config.common.output_sample_spec.pcm_format(),
                               receiver_config.common.output_sample_spec.channel_set());
 
         backup_pipeline.reset(new (context.arena()) pipeline::TranscoderSource(
                                   transcoder_config, *backup_source,
-                                  context.sample_buffer_factory(), context.arena()),
+                                  context.frame_buffer_pool(), context.arena()),
                               context.arena());
         if (!backup_pipeline) {
             roc_log(LogError, "can't create backup pipeline");
@@ -401,8 +426,8 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        netio::UdpReceiverConfig iface_config;
-        iface_config.reuseaddr = args.reuseaddr_given;
+        netio::UdpConfig iface_config;
+        iface_config.enable_reuseaddr = args.reuseaddr_given;
 
         if (args.miface_given) {
             if (strlen(args.miface_arg[slot])
@@ -434,8 +459,8 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        netio::UdpReceiverConfig iface_config;
-        iface_config.reuseaddr = args.reuseaddr_given;
+        netio::UdpConfig iface_config;
+        iface_config.enable_reuseaddr = args.reuseaddr_given;
 
         if (args.miface_given) {
             if (strlen(args.miface_arg[slot])
@@ -468,8 +493,8 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        netio::UdpReceiverConfig iface_config;
-        iface_config.reuseaddr = args.reuseaddr_given;
+        netio::UdpConfig iface_config;
+        iface_config.enable_reuseaddr = args.reuseaddr_given;
 
         if (args.miface_given) {
             if (strlen(args.miface_arg[slot])
@@ -494,7 +519,7 @@ int main(int argc, char** argv) {
     }
 
     sndio::Pump pump(
-        context.sample_buffer_factory(), receiver.source(), backup_pipeline.get(),
+        context.frame_buffer_pool(), receiver.source(), backup_pipeline.get(),
         *output_sink, io_config.frame_length, receiver_config.common.output_sample_spec,
         args.oneshot_flag ? sndio::Pump::ModeOneshot : sndio::Pump::ModePermanent);
     if (!pump.is_valid()) {

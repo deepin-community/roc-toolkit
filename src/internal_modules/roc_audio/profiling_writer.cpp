@@ -16,7 +16,7 @@ namespace audio {
 
 ProfilingWriter::ProfilingWriter(IFrameWriter& writer,
                                  core::IArena& arena,
-                                 const audio::SampleSpec& sample_spec,
+                                 const SampleSpec& sample_spec,
                                  ProfilerConfig profiler_config)
     : profiler_(arena, sample_spec, profiler_config)
     , writer_(writer) {
@@ -29,7 +29,7 @@ bool ProfilingWriter::is_valid() const {
 void ProfilingWriter::write(Frame& frame) {
     const core::nanoseconds_t elapsed = write_(frame);
 
-    profiler_.add_frame(frame.num_samples(), elapsed);
+    profiler_.add_frame(frame.duration(), elapsed);
 }
 
 core::nanoseconds_t ProfilingWriter::write_(Frame& frame) {

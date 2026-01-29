@@ -15,14 +15,13 @@
 #include "roc_address/socket_addr.h"
 #include "roc_audio/channel_mapper_reader.h"
 #include "roc_audio/depacketizer.h"
+#include "roc_audio/frame_factory.h"
 #include "roc_audio/iframe_decoder.h"
 #include "roc_audio/iframe_reader.h"
 #include "roc_audio/iresampler.h"
 #include "roc_audio/latency_monitor.h"
-#include "roc_audio/poison_reader.h"
 #include "roc_audio/resampler_reader.h"
 #include "roc_audio/watchdog.h"
-#include "roc_core/buffer_factory.h"
 #include "roc_core/iarena.h"
 #include "roc_core/list_node.h"
 #include "roc_core/optional.h"
@@ -38,14 +37,15 @@
 #include "roc_packet/packet_factory.h"
 #include "roc_packet/router.h"
 #include "roc_packet/sorted_queue.h"
+#include "roc_packet/units.h"
 #include "roc_pipeline/config.h"
 #include "roc_pipeline/metrics.h"
-#include "roc_rtcp/metrics.h"
-#include "roc_rtp/format_map.h"
+#include "roc_rtcp/reports.h"
+#include "roc_rtp/encoding_map.h"
+#include "roc_rtp/filter.h"
+#include "roc_rtp/link_meter.h"
 #include "roc_rtp/parser.h"
-#include "roc_rtp/populator.h"
 #include "roc_rtp/timestamp_injector.h"
-#include "roc_rtp/validator.h"
 
 namespace roc {
 namespace pipeline {
@@ -56,23 +56,32 @@ namespace pipeline {
 //!  - a pipeline for processing packets from single sender and converting
 //!    them into audio frames
 class ReceiverSession : public core::RefCounted<ReceiverSession, core::ArenaAllocation>,
-                        public core::ListNode {
+                        public core::ListNode<> {
 public:
     //! Initialize.
     ReceiverSession(const ReceiverSessionConfig& session_config,
                     const ReceiverCommonConfig& common_config,
-                    const address::SocketAddr& src_address,
-                    const rtp::FormatMap& format_map,
+                    const rtp::EncodingMap& encoding_map,
                     packet::PacketFactory& packet_factory,
-                    core::BufferFactory<uint8_t>& byte_buffer_factory,
-                    core::BufferFactory<audio::sample_t>& sample_buffer_factory,
+                    audio::FrameFactory& frame_factory,
                     core::IArena& arena);
 
-    //! Check if the session pipeline was succefully constructed.
+    //! Check if the session was succefully constructed.
     bool is_valid() const;
 
-    //! Try to route a packet to this session.
-    ROC_ATTR_NODISCARD status::StatusCode route(const packet::PacketPtr& packet);
+    //! Get frame reader.
+    //! @remarks
+    //!  This way samples are fetched from the pipeline.
+    //!  Most of the processing, like decoding packets, restoring losses, and adjust
+    //!  clock, happens during the read operation.
+    audio::IFrameReader& frame_reader();
+
+    //! Route a packet to the session.
+    //! @remarks
+    //!  This way packets from sender reach receiver pipeline.
+    //!  Packets are stored inside internal pipeline queues, and then fetched
+    //!  when frame are requested from frame_reader().
+    ROC_ATTR_NODISCARD status::StatusCode route_packet(const packet::PacketPtr& packet);
 
     //! Refresh pipeline according to current time.
     //! @remarks
@@ -90,40 +99,43 @@ public:
     //!  false if the session is ended
     bool reclock(core::nanoseconds_t playback_time);
 
+    //! Get number of RTCP reports to be generated.
+    size_t num_reports() const;
+
+    //! Generate RTCP reports to be delivered to sender.
+    void generate_reports(const char* report_cname,
+                          packet::stream_source_t report_ssrc,
+                          core::nanoseconds_t report_time,
+                          rtcp::RecvReport* reports,
+                          size_t n_reports) const;
+
+    //! Process RTCP report obtained from sender.
+    void process_report(const rtcp::SendReport& report);
+
     //! Get session metrics.
-    ReceiverSessionMetrics get_metrics() const;
-
-    //! Get audio reader.
-    audio::IFrameReader& reader();
-
-    //! Handle metrics obtained from sender.
-    void add_sending_metrics(const rtcp::SendingMetrics& metrics);
-
-    //! Handle estimated link metrics.
-    void add_link_metrics(const rtcp::LinkMetrics& metrics);
+    ReceiverParticipantMetrics get_metrics() const;
 
 private:
-    const address::SocketAddr src_address_;
+    audio::IFrameReader* frame_reader_;
 
-    audio::IFrameReader* audio_reader_;
-
-    core::Optional<packet::Router> queue_router_;
+    core::Optional<packet::Router> packet_router_;
 
     core::Optional<packet::SortedQueue> source_queue_;
     core::Optional<packet::SortedQueue> repair_queue_;
 
+    core::Optional<rtp::LinkMeter> source_meter_;
+    core::Optional<rtp::LinkMeter> repair_meter_;
+
     core::ScopedPtr<audio::IFrameDecoder> payload_decoder_;
 
-    core::Optional<rtp::Validator> validator_;
-    core::Optional<rtp::Populator> populator_;
+    core::Optional<rtp::Filter> filter_;
     core::Optional<packet::DelayedReader> delayed_reader_;
     core::Optional<audio::Watchdog> watchdog_;
 
     core::Optional<rtp::Parser> fec_parser_;
     core::ScopedPtr<fec::IBlockDecoder> fec_decoder_;
     core::Optional<fec::Reader> fec_reader_;
-    core::Optional<rtp::Validator> fec_validator_;
-    core::Optional<rtp::Populator> fec_populator_;
+    core::Optional<rtp::Filter> fec_filter_;
 
     core::Optional<rtp::TimestampInjector> timestamp_injector_;
 
@@ -131,13 +143,12 @@ private:
 
     core::Optional<audio::ChannelMapperReader> channel_mapper_reader_;
 
-    core::Optional<audio::PoisonReader> resampler_poisoner_;
     core::Optional<audio::ResamplerReader> resampler_reader_;
     core::SharedPtr<audio::IResampler> resampler_;
 
-    core::Optional<audio::PoisonReader> session_poisoner_;
-
     core::Optional<audio::LatencyMonitor> latency_monitor_;
+
+    bool valid_;
 };
 
 } // namespace pipeline

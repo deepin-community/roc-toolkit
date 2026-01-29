@@ -22,44 +22,47 @@ extern "C" {
 
 /** Network slot.
  *
- * A node (sender or receiver) may have multiple slots, which may be independently
+ * A peer (sender or receiver) may have multiple slots, which may be independently
  * bound or connected. You can use multiple slots on sender to connect it to multiple
- * receiver addresses, and you can use multiple slots on receiver to bind it to
+ * receiver addresses, or you can use multiple slots on receiver to bind it to
  * multiple receiver addresses.
  *
- * Slots are numbered from zero and are created implicitly. Just specify slot index
- * when binding or connecting endpoint, and slot will be automatically created if it
- * was not created yet. Numbers does not need to be continuous and can be arbitrary.
+ * Inside each slot, there can be up to one endpoint for each interface type, for
+ * example one source endpoint, one control endpoint, and so on. See \ref roc_interface
+ * for more details.
  *
- * In simple cases, when one slot is enough, just use \c ROC_SLOT_DEFAULT.
+ * Slots are created implicitly. Just specify slot index when binding or connecting
+ * endpoint, and slot will be automatically created if it doesn't exist yet.
+ * Slot indices can be arbitrary numbers and does not need to be continuous.
  *
- * Inside each slot, there can be up to one endpoint for each interface type.
- * See \ref roc_interface for details.
+ * In simple cases, when one slot is enough, just use \c ROC_SLOT_DEFAULT,
+ * which is an alias for slot index zero.
  */
 typedef unsigned long long roc_slot;
 
 /** Alias for the slot with index zero.
- * Has no special meaning, exists just for convenience.
+ * Has no special meaning. Exists for convenience, since most times
+ * user doesn't need to bother about multiple slots.
  * \see roc_slot
  */
 static const roc_slot ROC_SLOT_DEFAULT = 0;
 
 /** Network interface.
  *
- * Interface is a way to access the node (sender or receiver) via network.
+ * Interface is a way to access the peer (sender or receiver) via network.
  *
- * Each node slot has multiple interfaces, one of each type. The user interconnects
- * nodes by binding one of the first node's interfaces to an URI and then connecting the
- * corresponding second node's interface to that URI.
+ * Each slot of a peer (see \ref roc_slot) has multiple interfaces, one for each of the
+ * interface types. The user interconnects peers by binding an interface of one peer to
+ * an URI, and then connecting the corresponding interface of another peer to that URI.
  *
  * A URI is represented by \ref roc_endpoint object.
  *
- * The interface defines the type of the communication with the remote node and the
+ * The interface defines the type of the communication with the remote peer and the
  * set of protocols (URI schemes) that can be used with this particular interface.
  *
  * \c ROC_INTERFACE_CONSOLIDATED is an interface for high-level protocols which
  * automatically manage all necessary communication: transport streams, control messages,
- * parameter negotiation, etc. When a consolidated connection is established, nodes may
+ * parameter negotiation, etc. When a consolidated connection is established, peers may
  * automatically setup lower-level interfaces like \c ROC_INTERFACE_AUDIO_SOURCE, \c
  * ROC_INTERFACE_AUDIO_REPAIR, and \c ROC_INTERFACE_AUDIO_CONTROL.
  *
@@ -72,10 +75,10 @@ static const roc_slot ROC_SLOT_DEFAULT = 0;
  * unidirectional transport-only interfaces. The first is used to transmit audio stream,
  * and the second is used to transmit redundant repair stream, if FEC is enabled.
  *
- * \c ROC_INTERFACE_AUDIO_CONTROL is a lower-level interface for control streams.
- * If you use \c ROC_INTERFACE_AUDIO_SOURCE and \c ROC_INTERFACE_AUDIO_REPAIR, you
- * usually also need to use \c ROC_INTERFACE_AUDIO_CONTROL to enable carrying additional
- * non-transport information.
+ * \c ROC_INTERFACE_AUDIO_CONTROL is a lower-level bidirectional interface for control
+ * streams. If you use \c ROC_INTERFACE_AUDIO_SOURCE and \c ROC_INTERFACE_AUDIO_REPAIR,
+ * you usually also need to use \c ROC_INTERFACE_AUDIO_CONTROL to enable carrying
+ * additional non-transport information.
  */
 typedef enum roc_interface {
     /** Interface that consolidates all types of streams (source, repair, control).
@@ -231,7 +234,7 @@ typedef enum roc_protocol {
 
 /** Packet encoding.
  * Each packet encoding defines sample format, channel layout, and rate.
- * Each packet encoding is caompatible with specific protocols.
+ * Each packet encoding is compatible with specific protocols.
  */
 typedef enum roc_packet_encoding {
     /** PCM signed 16-bit, 1 channel, 44100 rate.
@@ -262,7 +265,7 @@ typedef enum roc_packet_encoding {
 } roc_packet_encoding;
 
 /** Forward Error Correction encoding.
- * Each FEC encoding is caompatible with specific protocols.
+ * Each FEC encoding is compatible with specific protocols.
  */
 typedef enum roc_fec_encoding {
     /** No FEC encoding.
@@ -383,6 +386,11 @@ typedef struct roc_media_encoding {
  * Defines wo is responsible to invoke read or write in proper time.
  */
 typedef enum roc_clock_source {
+    /** Default clock source.
+     * Current default is \c ROC_CLOCK_SOURCE_EXTERNAL.
+     */
+    ROC_CLOCK_SOURCE_DEFAULT = 0,
+
     /** Sender or receiver is clocked by external user-defined clock.
      *
      * Write and read operations are non-blocking. The user is responsible
@@ -392,7 +400,7 @@ typedef enum roc_clock_source {
      * or destination (to where you write them after obtaining from sender)
      * is active and has its own clock, e.g. it is a sound card.
      */
-    ROC_CLOCK_SOURCE_EXTERNAL = 0,
+    ROC_CLOCK_SOURCE_EXTERNAL = 1,
 
     /** Sender or receiver is clocked by an internal pipeline clock.
      *
@@ -404,33 +412,34 @@ typedef enum roc_clock_source {
      * or destination (to where you write them after obtaining from sender)
      * is passive and does now have clock, e.g. it is a file on disk.
      */
-    ROC_CLOCK_SOURCE_INTERNAL = 1
+    ROC_CLOCK_SOURCE_INTERNAL = 2
 } roc_clock_source;
 
-/** Clock synchronization algorithm.
- * Defines how sender and receiver clocks are synchronized.
+/** Latency tuner backend.
+ * Defines which latency is monitored and tuned by latency tuner.
  */
-typedef enum roc_clock_sync_backend {
-    /** Disable clock synchronization.
-     *
-     * In this mode, sender and receiver clocks are not synchronized. This mode is
-     * generally not recommended, since clock drift will lead to periodic playback
-     * disruptions caused by underruns and overruns.
-     */
-    ROC_CLOCK_SYNC_BACKEND_DISABLE = -1,
-
+typedef enum roc_latency_tuner_backend {
     /** Default backend.
-     * Current default is \c ROC_CLOCK_SYNC_BACKEND_NIQ.
+     * Current default is \c ROC_LATENCY_TUNER_BACKEND_NIQ.
      */
-    ROC_CLOCK_SYNC_BACKEND_DEFAULT = 0,
+    ROC_LATENCY_TUNER_BACKEND_DEFAULT = 0,
 
-    /** Clock synchronization based on network incoming queue size.
+    /** Latency tuning is based on network incoming queue length.
      *
-     * In this mode, receiver monitors incoming queue size and adjusts playback clock
-     * speed to match the estimated capture clock speed.
+     * In this mode, latency is defined as incoming queue length (in nanoseconds).
+     * Latency tuner monitors queue length and and adjusts playback clock speed
+     * to keep queue length close to configured target latency.
+     *
+     * Keeping constant queue length allows to match playback clock speed with the
+     * capture clock speed and to keep the overall latency constant (yet unknown).
+     *
+     * On receiver, this backend is always available, without any protocol help.
+     * On sender, this backend works only if RTCP is enabled and both sender and
+     * receiver are implemented with roc-toolkit, as it relies on a non-standard
+     * RTCP extension to report receiver queue length to sender.
      *
      * Pros:
-     *  - works with any protocol (does not require RTCP or NTP)
+     *  - works with any protocol if used on receiver (does not require RTCP or NTP)
      *
      * Cons:
      *  - synchronizes only clock speed, but not position; different receivers will
@@ -438,22 +447,40 @@ typedef enum roc_clock_sync_backend {
      *  - affected by network jitter; spikes in packet delivery will cause slow
      *    oscillations in clock speed
      */
-    ROC_CLOCK_SYNC_BACKEND_NIQ = 2
-} roc_clock_sync_backend;
+    ROC_LATENCY_TUNER_BACKEND_NIQ = 2
+} roc_latency_tuner_backend;
 
-/** Clock synchronization profile.
- * Defines what latency and jitter are tolerated by clock synchronization algorithm.
+/** Latency tuner profile.
+ * Defines whether latency tuning is enabled and which algorithm is used.
  */
-typedef enum roc_clock_sync_profile {
+typedef enum roc_latency_tuner_profile {
     /** Default profile.
      *
-     * When \ref ROC_CLOCK_SYNC_BACKEND_NIQ is used, selects \ref
-     * ROC_CLOCK_SYNC_PROFILE_RESPONSIVE if target latency is low, and \ref
-     * ROC_CLOCK_SYNC_PROFILE_GRADUAL if target latency is high.
+     * On receiver, when \ref ROC_LATENCY_TUNER_BACKEND_NIQ is used, selects \ref
+     * ROC_LATENCY_TUNER_PROFILE_RESPONSIVE if target latency is low, and \ref
+     * ROC_LATENCY_TUNER_PROFILE_GRADUAL if target latency is high.
+     *
+     * On sender, selects \ref ROC_LATENCY_TUNER_PROFILE_INTACT.
      */
-    ROC_CLOCK_SYNC_PROFILE_DEFAULT = 0,
+    ROC_LATENCY_TUNER_PROFILE_DEFAULT = 0,
 
-    /** Responsive clock adjustment.
+    /** No latency tuning.
+     *
+     * In this mode, clock speed is not adjusted. Default on sender.
+     *
+     * You can set this mode on receiver, and set some other mode on sender, to
+     * do latency tuning on sender side instead of recever side. It's useful
+     * when receiver is CPU-constrained and sender is not, because latency tuner
+     * relies on resampling, which is CPU-demanding.
+     *
+     * You can also set this mode on both sender and receiver if you don't need
+     * latency tuning at all. However, if sender and receiver have independent
+     * clocks (which is typically the case), clock drift will lead to periodic
+     * playback disruptions caused by underruns and overruns.
+     */
+    ROC_LATENCY_TUNER_PROFILE_INTACT = 1,
+
+    /** Responsive latency tuning.
      *
      * Clock speed is adjusted quickly and accurately.
      *
@@ -461,16 +488,16 @@ typedef enum roc_clock_sync_profile {
      * \ref ROC_RESAMPLER_BACKEND_BUILTIN.
      *
      * Pros:
-     *  - allows very low latency or synchronization error
+     *  - allows very low latency and synchronization error
      *
      * Cons:
      *  - does not work well with some resampler backends
-     *  - does not work well with \ref ROC_CLOCK_SYNC_BACKEND_NIQ
+     *  - does not work well with \ref ROC_LATENCY_TUNER_BACKEND_NIQ
      *    if network jitter is high
      */
-    ROC_CLOCK_SYNC_PROFILE_RESPONSIVE = 1,
+    ROC_LATENCY_TUNER_PROFILE_RESPONSIVE = 2,
 
-    /** Gradual clock adjustment.
+    /** Gradual latency tuning.
      *
      * Clock speed is adjusted slowly and smoothly.
      *
@@ -479,10 +506,10 @@ typedef enum roc_clock_sync_profile {
      *  - works well with any resampler backend
      *
      * Cons:
-     *  - does not allow very low latency or synchronization error
+     *  - does not allow very low latency and synchronization error
      */
-    ROC_CLOCK_SYNC_PROFILE_GRADUAL = 2
-} roc_clock_sync_profile;
+    ROC_LATENCY_TUNER_PROFILE_GRADUAL = 3
+} roc_latency_tuner_profile;
 
 /** Resampler backend.
  * Affects CPU usage, quality, and clock synchronization precision.
@@ -492,7 +519,7 @@ typedef enum roc_resampler_backend {
     /** Default backend.
      *
      * Selects \ref ROC_RESAMPLER_BACKEND_BUILTIN when using \ref
-     * ROC_CLOCK_SYNC_PROFILE_RESPONSIVE, or when SpeexDSP is disabled.
+     * ROC_LATENCY_TUNER_PROFILE_RESPONSIVE, or when SpeexDSP is disabled.
      *
      * Otherwise, selects \ref ROC_RESAMPLER_BACKEND_SPEEX.
      */
@@ -510,7 +537,7 @@ typedef enum roc_resampler_backend {
      *
      * This backend is always available.
      *
-     * Recommended for \ref ROC_CLOCK_SYNC_PROFILE_RESPONSIVE and on good CPUs.
+     * Recommended for \ref ROC_LATENCY_TUNER_PROFILE_RESPONSIVE and on good CPUs.
      */
     ROC_RESAMPLER_BACKEND_BUILTIN = 1,
 
@@ -523,7 +550,7 @@ typedef enum roc_resampler_backend {
      *
      * This backend is available only when SpeexDSP was enabled at build time.
      *
-     * Recommended for \ref ROC_CLOCK_SYNC_PROFILE_GRADUAL and on cheap CPUs.
+     * Recommended for \ref ROC_LATENCY_TUNER_PROFILE_GRADUAL and on cheap CPUs.
      */
     ROC_RESAMPLER_BACKEND_SPEEX = 2,
 
@@ -582,15 +609,19 @@ typedef enum roc_resampler_profile {
  */
 typedef struct roc_context_config {
     /** Maximum size in bytes of a network packet.
+     *
      * Defines the amount of bytes allocated per network packet.
      * Sender and receiver won't handle packets larger than this.
+     *
      * If zero, default value is used.
      */
     unsigned int max_packet_size;
 
     /** Maximum size in bytes of an audio frame.
+     *
      * Defines the amount of bytes allocated per intermediate internal frame in the
      * pipeline. Does not limit the size of the frames provided by user.
+     *
      * If zero, default value is used.
      */
     unsigned int max_frame_size;
@@ -606,9 +637,11 @@ typedef struct roc_context_config {
  */
 typedef struct roc_sender_config {
     /** The encoding used in frames passed to sender.
+     *
      * Frame encoding defines sample format, channel layout, and sample rate in local
      * frames created by user and passed to sender.
-     * Should be set (zero value is invalid).
+     *
+     * Should be set explicitly (zero value is invalid).
      */
     roc_media_encoding frame_encoding;
 
@@ -625,31 +658,37 @@ typedef struct roc_sender_config {
      *
      * If you want to force specific packet encoding, and built-in set of encodings is
      * not enough, you can use \ref roc_context_register_encoding() to register custom
-     * encoding, set \c packet_encoding to registered identifier. If you use signaling
+     * encoding, and set \c packet_encoding to registered identifier. If you use signaling
      * protocol like RTSP, it's enough to register in just on sender; otherwise, you
      * need to do the same on receiver as well.
      */
     roc_packet_encoding packet_encoding;
 
     /** The length of the packets produced by sender, in nanoseconds.
+     *
      * Number of nanoseconds encoded per packet.
      * The samples written to the sender are buffered until the full packet is
      * accumulated or the sender is flushed or closed. Larger number reduces
-     * packet overhead but also increases latency.
+     * packet overhead but also does not allow smaller latency.
+     *
      * If zero, default value is used.
      */
     unsigned long long packet_length;
 
     /** Enable packet interleaving.
+     *
      * If non-zero, the sender shuffles packets before sending them. This
      * may increase robustness but also increases latency.
      */
     unsigned int packet_interleaving;
 
     /** FEC encoding to use.
-     * If non-zero, the sender employs a FEC encoding to generate redundant packets
-     * which may be used on receiver to restore lost packets. This requires both
-     * sender and receiver to use two separate source and repair endpoints.
+     *
+     * If FEC is enabled, the sender employs a FEC encoding to generate redundant
+     * packet which may be used on receiver to restore lost packets. This requires
+     * both sender and receiver to use two separate source and repair endpoints.
+     *
+     * If zero, default encoding is used (\ref ROC_FEC_ENCODING_DEFAULT).
      */
     roc_fec_encoding fec_encoding;
 
@@ -683,21 +722,77 @@ typedef struct roc_sender_config {
     unsigned int fec_block_repair_packets;
 
     /** Clock source to use.
-     * Defines whether write operation will be blocking or non-blocking.
-     * If zero, default value is used (\c ROC_CLOCK_SOURCE_EXTERNAL).
+     * Defines whether write operation is blocking or non-blocking.
+     *
+     * If zero, default value is used (\ref ROC_CLOCK_SOURCE_DEFAULT).
      */
     roc_clock_source clock_source;
 
-    /** Resampler backend to use.
-     * If zero, default value is used.
+    /** Latency tuner backend.
+     * Defines which latency is monitored and controlled by latency tuner.
+     * Defines semantics of \c target_latency, \c min_latency, and \c max_latency fields.
+     *
+     * If zero, default backend is used (\ref ROC_LATENCY_TUNER_BACKEND_DEFAULT).
+     */
+    roc_latency_tuner_backend latency_tuner_backend;
+
+    /** Latency tuner profile.
+     * Defines whether latency tuning is enabled and which algorithm is used.
+     *
+     * If zero, default profile is used (\ref ROC_LATENCY_TUNER_PROFILE_DEFAULT).
+     *
+     * By default, latency tuning is **disabled** on sender. If you enable it on sender,
+     * you need to disable it on receiver. You also need to set \c target_latency to
+     * the exact same value on both sides.
+     */
+    roc_latency_tuner_profile latency_tuner_profile;
+
+    /** Resampler backend.
+     * Affects CPU usage, quality, and clock synchronization precision
+     * (if latency tuning is enabled).
+     *
+     * If zero, default backend is used (\ref ROC_RESAMPLER_BACKEND_DEFAULT).
      */
     roc_resampler_backend resampler_backend;
 
-    /** Resampler profile to use.
-     * If non-zero, the sender employs resampler if the frame sample rate differs
-     * from the packet sample rate.
+    /** Resampler profile.
+     * Affects CPU usage and quality.
+     *
+     * If zero, default profile is used (\ref ROC_RESAMPLER_PROFILE_DEFAULT).
      */
     roc_resampler_profile resampler_profile;
+
+    /** Target latency, in nanoseconds.
+     *
+     * How latency is calculated depends on \c latency_tuner_backend field.
+     *
+     * If latency tuning is enabled on sender (if \c latency_tuner_profile is not
+     * \ref ROC_LATENCY_TUNER_PROFILE_INTACT), sender adjusts its clock to keep
+     * actual latency as close as possible to the target.
+     *
+     * By default, latency tuning is **disabled** on sender. If you enable it on sender,
+     * you need to disable it on receiver. You also need to set \c target_latency to
+     * the exact same value on both sides.
+     *
+     * If latency tuning is enabled, \c target_latency should be non-zero.
+     */
+    unsigned long long target_latency;
+
+    /** Maximum allowed delta between current and target latency, in nanoseconds.
+     *
+     * How latency is calculated depends on \c latency_tuner_backend field.
+     *
+     * If latency tuning is enabled on sender (if \c latency_tuner_profile is not
+     * \ref ROC_LATENCY_TUNER_PROFILE_INTACT), sender monitors current latency, and
+     * if it differs from \c target_latency more than by \c latency_tolerance, sender
+     * restarts connection to receiver.
+     *
+     * By default, latency bounding is **disabled** on sender. If you enable it on sender,
+     * you likely want to disable it on receiver.
+     *
+     * If zero, default value is used (if latency tuning is enabled on sender).
+     */
+    unsigned long long latency_tolerance;
 } roc_sender_config;
 
 /** Receiver configuration.
@@ -710,75 +805,109 @@ typedef struct roc_sender_config {
  */
 typedef struct roc_receiver_config {
     /** The encoding used in frames returned by receiver.
+     *
      * Frame encoding defines sample format, channel layout, and sample rate in local
      * frames returned by receiver to user.
+     *
      * Should be set (zero value is invalid).
      */
     roc_media_encoding frame_encoding;
 
     /** Clock source.
-     * Defines whether read operation will be blocking or non-blocking.
-     * If zero, \ref ROC_CLOCK_SOURCE_EXTERNAL is used.
+     * Defines whether read operation is blocking or non-blocking.
+     *
+     * If zero, default value is used (\ref ROC_CLOCK_SOURCE_DEFAULT).
      */
     roc_clock_source clock_source;
 
-    /** Clock synchronization backend.
-     * Defines how sender and receiver clocks are synchronized.
-     * If zero, default value is used.
+    /** Latency tuner backend.
+     * Defines which latency is monitored and controlled by latency tuner.
+     * Defines semantics of \c target_latency, \c min_latency, and \c max_latency fields.
+     *
+     * If zero, default backend is used (\ref ROC_LATENCY_TUNER_BACKEND_DEFAULT).
      */
-    roc_clock_sync_backend clock_sync_backend;
+    roc_latency_tuner_backend latency_tuner_backend;
 
-    /**  Clock synchronization profile.
-     * Defines what latency and network jitter are tolerated.
-     * If zero, default value is used.
+    /** Latency tuner profile.
+     * Defines whether latency tuning is enabled and which algorithm is used.
+     *
+     * If zero, default profile is used (\ref ROC_LATENCY_TUNER_PROFILE_DEFAULT).
+     *
+     * By default, latency tuning is **enabled** on receiver. If you disable it on
+     * receiver, you usually need to enable it on sender. In that case you also need to
+     * set \c target_latency to the same value on both sides.
      */
-    roc_clock_sync_profile clock_sync_profile;
+    roc_latency_tuner_profile latency_tuner_profile;
 
     /** Resampler backend.
-     * Affects CPU usage, quality, and clock synchronization precision.
-     * If zero, default value is used.
+     * Affects CPU usage, quality, and clock synchronization precision
+     * (if latency tuning is enabled).
+     *
+     * If zero, default backend is used (\ref ROC_RESAMPLER_BACKEND_DEFAULT).
      */
     roc_resampler_backend resampler_backend;
 
     /** Resampler profile.
      * Affects CPU usage and quality.
-     * If zero, default value is used.
+     *
+     * If zero, default profile is used (\ref ROC_RESAMPLER_PROFILE_DEFAULT).
      */
     roc_resampler_profile resampler_profile;
 
     /** Target latency, in nanoseconds.
-     * The session will not start playing until it accumulates the requested latency.
-     * Then, if clock synchronization is enabled, the session will adjust its clock to
-     * keep actual latency as close as possible to the target latency.
+     *
+     * How latency is calculated depends on \c latency_tuner_backend field.
+     *
+     * If latency tuning is enabled on receiver (if \c latency_tuner_profile is not
+     * \ref ROC_LATENCY_TUNER_PROFILE_INTACT), receiver adjusts its clock to keep
+     * actual latency as close as possible to the target.
+     *
+     * By default, latency tuning is **enabled** on receiver. If you disable it on
+     * receiver, you likely want to enable it on sender. In this case you also need to
+     * set \c target_latency to the exact same value on both sides.
+     *
      * If zero, default value is used.
      */
     unsigned long long target_latency;
 
     /** Maximum allowed delta between current and target latency, in nanoseconds.
-     * If session latency differs from the target latency by more than given value, the
-     * session is terminated (it can then automatically restart). Receiver itself is
-     * not terminated; if there are no sessions, it will produce zeros.
-     * If zero, default value is used.
+     *
+     * How latency is calculated depends on \c latency_tuner_backend field.
+     *
+     * If latency tuning is enabled on receiver (if \c latency_tuner_profile is not
+     * \ref ROC_LATENCY_TUNER_PROFILE_INTACT), receiver monitors current latency, and
+     * if it differs from \c target_latency more than by \c latency_tolerance, receiver
+     * terminates connection to sender (but it then restarts if sender continues
+     * streaming).
+     *
+     * By default, latency bounding is **enabled** on receiver. If you disable it on
+     * receiver, you likely want to enable it on sender.
+     *
+     * If zero, default value is used (if latency tuning is enabled on receiver).
      */
     unsigned long long latency_tolerance;
 
     /** Timeout for the lack of playback, in nanoseconds.
-     * If there is no playback during this period, the session is terminated (it can
-     * then automatically restart). Receiver itself is not terminated; if there are
-     * no sessions, it will produce zeros.
+     *
+     * If there is no playback during this period, receiver terminates connection to
+     * to sender (but it then restarts if sender continues streaming).
+     *
      * This mechanism allows to detect dead, hanging, or incompatible clients that
      * generate unparseable packets.
-     * If zero, default value is used. If negative, the timeout is disabled.
+     *
+     * If zero, default value is used. If negative, the check is disabled.
      */
     long long no_playback_timeout;
 
     /** Timeout for choppy playback, in nanoseconds.
-     * If there is constant stuttering during this period, the session is terminated (it
-     * can then automatically restart). Receiver itself is not terminated; if there are
-     * no sessions, it will produce zeros.
+     *
+     * If there is constant stuttering during this period, receiver terminates connection
+     * to sender (but it then restarts if sender continues streaming).
+     *
      * This mechanism allows to detect situations when playback continues but there
      * are frequent glitches, for example because there is a high ratio of late packets.
-     * If zero, default value is used. If negative, the timeout is disabled.
+     *
+     * If zero, default value is used. If negative, the check is disabled.
      */
     long long choppy_playback_timeout;
 } roc_receiver_config;
@@ -814,15 +943,15 @@ typedef struct roc_interface_config {
 
     /** Multicast group IP address.
      *
-     * Multicast group should be set only when binding interface to an endpoint with
-     * multicast IP address. If present, it defines an IP address of the OS network
-     * interface on which to join the multicast group. If not present, no multicast
-     * group is joined.
+     * Multicast group should be set only when binding or connecting interface to an
+     * endpoint with multicast IP address. If present, it defines an IP address of the
+     * OS network interface on which to join the multicast group. If not present, no
+     * multicast group is joined.
      *
-     * It's possible to receive multicast traffic from only those OS network interfaces,
+     * It's allowed to receive multicast traffic from only those OS network interfaces,
      * on which the process has joined the multicast group. When using multicast, the
      * user should either set this field, or join multicast group manually using
-     * OS-specific API.
+     * OS-specific APIs.
      *
      * It is allowed to set multicast group to `0.0.0.0` (for IPv4) or to `::` (for IPv6),
      * to be able to receive multicast traffic from all available interfaces. However,

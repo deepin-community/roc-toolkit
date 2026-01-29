@@ -56,6 +56,20 @@ inline bool stream_timestamp_le(const stream_timestamp_t a, const stream_timesta
     return stream_timestamp_diff(a, b) <= 0;
 }
 
+//! Convert nanoseconds to stream timestamp.
+stream_timestamp_t ns_2_stream_timestamp(core::nanoseconds_t ns, size_t sample_rate);
+
+//! Convert stream timestamp.to nanoseconds.
+core::nanoseconds_t stream_timestamp_2_ns(stream_timestamp_t ts, size_t sample_rate);
+
+//! Convert nanoseconds to stream timestamp delta.
+stream_timestamp_diff_t ns_2_stream_timestamp_delta(core::nanoseconds_t ns,
+                                                    size_t sample_rate);
+
+//! Convert stream timestamp.delta to nanoseconds.
+core::nanoseconds_t stream_timestamp_delta_2_ns(stream_timestamp_diff_t ts,
+                                                size_t sample_rate);
+
 //! Packet sequence number.
 //! @remarks
 //!  Defines position of packet within stream.
@@ -81,6 +95,31 @@ inline bool seqnum_lt(const seqnum_t a, const seqnum_t b) {
 //! Check if `a` is before or equal to `b`, taking possible wrap into account.
 inline bool seqnum_le(const seqnum_t a, const seqnum_t b) {
     return seqnum_diff(a, b) <= 0;
+}
+
+//! Extended sequence number.
+//! @remarks
+//!  Sequence number extended to 32 bits.
+typedef uint32_t ext_seqnum_t;
+
+//! Extended sequence number delta.
+//! @remarks
+//!  Signed version of ext_seqnum_t.
+typedef int32_t ext_seqnum_diff_t;
+
+//! Compute difference between two extended seqnums.
+inline ext_seqnum_diff_t ext_seqnum_diff(const ext_seqnum_t a, const ext_seqnum_t b) {
+    return ext_seqnum_diff_t(a - b);
+}
+
+//! Check if `a` is before `b`, taking possible wrap into account.
+inline bool ext_seqnum_lt(const ext_seqnum_t a, const ext_seqnum_t b) {
+    return ext_seqnum_diff(a, b) < 0;
+}
+
+//! Check if `a` is before or equal to `b`, taking possible wrap into account.
+inline bool ext_seqnum_le(const ext_seqnum_t a, const ext_seqnum_t b) {
+    return ext_seqnum_diff(a, b) <= 0;
 }
 
 //! FEC packet block number.

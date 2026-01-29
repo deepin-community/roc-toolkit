@@ -12,8 +12,6 @@
 #ifndef ROC_CORE_TEMP_FILE_H_
 #define ROC_CORE_TEMP_FILE_H_
 
-#include <limits.h>
-
 #include "roc_core/noncopyable.h"
 #include "roc_core/stddefs.h"
 
@@ -37,8 +35,8 @@ public:
     const char* path() const;
 
 private:
-    char dir_[PATH_MAX];
-    char file_[PATH_MAX];
+    char dir_[1024];
+    char file_[1024];
 };
 
 } // namespace core

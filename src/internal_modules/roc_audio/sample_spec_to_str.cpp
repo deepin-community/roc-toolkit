@@ -7,7 +7,6 @@
  */
 
 #include "roc_audio/sample_spec_to_str.h"
-#include "roc_core/string_builder.h"
 
 namespace roc {
 namespace audio {
@@ -15,11 +14,7 @@ namespace audio {
 sample_spec_to_str::sample_spec_to_str(const SampleSpec& sample_spec) {
     core::StringBuilder bld(buf_, sizeof(buf_));
 
-    bld.append_str("<sspec rate=");
-    bld.append_uint(sample_spec.sample_rate(), 10);
-    bld.append_str(" chset=");
-    format_channel_set(sample_spec.channel_set(), bld);
-    bld.append_str(">");
+    format_sample_spec(sample_spec, bld);
 }
 
 } // namespace audio

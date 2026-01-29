@@ -16,14 +16,14 @@ namespace core {
 
 namespace {
 
-enum { NumObjects = 10, EmbeddedCap = 5 };
+enum { NumObjects = 20, EmbeddedCap = 10 };
 
 struct Object {
     static long n_objects;
 
     size_t value;
 
-    Object(size_t v = 0)
+    explicit Object(size_t v = 0)
         : value(v) {
         n_objects++;
     }
@@ -44,18 +44,18 @@ long Object::n_objects = 0;
 
 TEST_GROUP(array) {
     HeapArena arena;
+
+    void setup() {
+        Object::n_objects = 0;
+    }
 };
 
-TEST(array, empty) {
+TEST(array, grow) {
     Array<Object, EmbeddedCap> array(arena);
 
     LONGS_EQUAL(0, array.capacity());
     LONGS_EQUAL(0, array.size());
     LONGS_EQUAL(0, Object::n_objects);
-}
-
-TEST(array, grow) {
-    Array<Object, EmbeddedCap> array(arena);
 
     CHECK(array.grow(3));
 
@@ -72,6 +72,10 @@ TEST(array, grow) {
 
 TEST(array, grow_exp) {
     Array<Object, EmbeddedCap> array(arena);
+
+    LONGS_EQUAL(0, array.capacity());
+    LONGS_EQUAL(0, array.size());
+    LONGS_EQUAL(0, Object::n_objects);
 
     CHECK(array.grow_exp(3));
 
@@ -101,6 +105,10 @@ TEST(array, grow_exp) {
 TEST(array, resize) {
     Array<Object, EmbeddedCap> array(arena);
 
+    LONGS_EQUAL(0, array.capacity());
+    LONGS_EQUAL(0, array.size());
+    LONGS_EQUAL(0, Object::n_objects);
+
     CHECK(array.resize(3));
 
     LONGS_EQUAL(3, array.capacity());
@@ -114,7 +122,59 @@ TEST(array, resize) {
     LONGS_EQUAL(1, Object::n_objects);
 }
 
+TEST(array, is_empty) {
+    Array<Object, EmbeddedCap> array(arena);
+
+    CHECK(array.size() == 0);
+    CHECK(array.is_empty());
+
+    CHECK(array.resize(1));
+
+    CHECK(array.size() != 0);
+    CHECK(!array.is_empty());
+
+    CHECK(array.resize(0));
+
+    CHECK(array.size() == 0);
+    CHECK(array.is_empty());
+}
+
 TEST(array, push_back) {
+    { // auto grow
+        Array<Object, EmbeddedCap> array(arena);
+
+        for (size_t n = 0; n < NumObjects; n++) {
+            CHECK(array.push_back(Object(n)));
+
+            CHECK(array.capacity() >= n + 1);
+            LONGS_EQUAL(n + 1, array.size());
+            LONGS_EQUAL(n + 1, Object::n_objects);
+        }
+
+        for (size_t n = 0; n < NumObjects; n++) {
+            LONGS_EQUAL(n, array[n].value);
+        }
+    }
+    { // explicit grow
+        Array<Object, EmbeddedCap> array(arena);
+
+        CHECK(array.grow(NumObjects));
+
+        for (size_t n = 0; n < NumObjects; n++) {
+            CHECK(array.push_back(Object(n)));
+
+            LONGS_EQUAL(NumObjects, array.capacity());
+            LONGS_EQUAL(n + 1, array.size());
+            LONGS_EQUAL(n + 1, Object::n_objects);
+        }
+
+        for (size_t n = 0; n < NumObjects; n++) {
+            LONGS_EQUAL(n, array[n].value);
+        }
+    }
+}
+
+TEST(array, pop_back) {
     Array<Object, EmbeddedCap> array(arena);
 
     CHECK(array.grow(NumObjects));
@@ -127,15 +187,19 @@ TEST(array, push_back) {
         LONGS_EQUAL(n + 1, Object::n_objects);
     }
 
-    for (size_t n = 0; n < NumObjects; n++) {
-        LONGS_EQUAL(n, array[n].value);
+    LONGS_EQUAL(NumObjects, array.size());
+    for (size_t n = NumObjects; n >= 1; n--) {
+        LONGS_EQUAL(n - 1, array[n - 1].value);
+        array.pop_back();
+        LONGS_EQUAL(n - 1, array.size());
     }
+
+    LONGS_EQUAL(NumObjects, array.capacity());
+    CHECK(array.is_empty());
 }
 
-TEST(array, data) {
+TEST(array, data_pointer) {
     Array<Object, EmbeddedCap> array(arena);
-
-    CHECK(array.data() == NULL);
 
     CHECK(array.resize(NumObjects));
 
@@ -144,6 +208,32 @@ TEST(array, data) {
     for (size_t n = 0; n < NumObjects; n++) {
         POINTERS_EQUAL(&array[n], array.data() + n);
     }
+}
+
+TEST(array, front) {
+    Array<Object, EmbeddedCap> array(arena);
+
+    CHECK(array.size() == 0);
+    CHECK(array.is_empty());
+
+    CHECK(array.push_back(Object(1)));
+    LONGS_EQUAL(array.front().value, 1);
+
+    CHECK(array.push_back(Object(2)));
+    LONGS_EQUAL(array.front().value, 1);
+}
+
+TEST(array, back) {
+    Array<Object, EmbeddedCap> array(arena);
+
+    CHECK(array.size() == 0);
+    CHECK(array.is_empty());
+
+    CHECK(array.push_back(Object(1)));
+    LONGS_EQUAL(array.back().value, 1);
+
+    CHECK(array.push_back(Object(2)));
+    LONGS_EQUAL(array.back().value, 2);
 }
 
 TEST(array, embedding) {
@@ -181,7 +271,7 @@ TEST(array, constructor_destructor) {
         LONGS_EQUAL(0, arena.num_allocations());
         LONGS_EQUAL(3, Object::n_objects);
 
-        CHECK(array.grow(7));
+        CHECK(array.grow(15));
 
         LONGS_EQUAL(1, arena.num_allocations());
         LONGS_EQUAL(3, Object::n_objects);

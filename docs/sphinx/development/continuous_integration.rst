@@ -31,6 +31,7 @@ Linux native
 =================================== ===================== ============= ==================================
 Image                               Base image            Architecture  Compilers
 =================================== ===================== ============= ==================================
+rocstreaming/env-ubuntu:24.04       ubuntu:24.04          x86_64        gcc-13, clang-15, clang-17
 rocstreaming/env-ubuntu:22.04       ubuntu:22.04          x86_64        gcc-11, gcc-12, clang-11, clang-14
 rocstreaming/env-ubuntu:20.04       ubuntu:20.04          x86_64        gcc-8, gcc-10, clang-8, clang-10
 rocstreaming/env-ubuntu:18.04       ubuntu:18.04          x86_64        gcc-6, clang-6
@@ -47,13 +48,15 @@ rocstreaming/env-alpine             alpine:latest         x86_64        distro d
 Linux toolchains
 ----------------
 
-============================================================== ============= ==========================
-Image                                                          Architecture  Compilers
-============================================================== ============= ==========================
-rocstreaming/toolchain-aarch64-linux-gnu:gcc-7.4               armv8-a       gcc-7.4, gcc-10.3
-rocstreaming/toolchain-arm-linux-gnueabihf:gcc-4.9             armv7-a       gcc-4.9, gcc-7.4, gcc-10.3
-rocstreaming/toolchain-arm-bcm2708hardfp-linux-gnueabi:gcc-4.7 armv6         gcc-4.7
-============================================================== ============= ==========================
+============================================================== ============= ====== ==========================
+Image                                                          Architecture  Libc   Compilers
+============================================================== ============= ====== ==========================
+rocstreaming/toolchain-aarch64-linux-gnu:gcc-7.4               armv8-a       glibc  gcc-7.4, gcc-10.3
+rocstreaming/toolchain-arm-linux-gnueabihf:gcc-4.9             armv7-a       glibc  gcc-4.9, gcc-7.4, gcc-10.3
+rocstreaming/toolchain-arm-bcm2708hardfp-linux-gnueabi:gcc-4.7 armv6         glibc  gcc-4.7
+rocstreaming/toolchain-mips-openwrt-linux-atheros:17.01        mips32 24Kc   musl   gcc-5.4
+rocstreaming/toolchain-mips-openwrt-linux-atheros:12.09        mips32 24Kc   uClibc gcc-4.6
+============================================================== ============= ====== ==========================
 
 Android toolchains
 ------------------

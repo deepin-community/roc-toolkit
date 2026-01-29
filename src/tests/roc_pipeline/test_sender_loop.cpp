@@ -10,12 +10,11 @@
 
 #include "test_helpers/mock_scheduler.h"
 
-#include "roc_core/buffer_factory.h"
 #include "roc_core/heap_arena.h"
-#include "roc_packet/packet_factory.h"
+#include "roc_core/slab_pool.h"
 #include "roc_packet/queue.h"
 #include "roc_pipeline/sender_loop.h"
-#include "roc_rtp/format_map.h"
+#include "roc_rtp/encoding_map.h"
 
 namespace roc {
 namespace pipeline {
@@ -25,11 +24,16 @@ namespace {
 enum { MaxBufSize = 1000 };
 
 core::HeapArena arena;
-core::BufferFactory<audio::sample_t> sample_buffer_factory(arena, MaxBufSize);
-core::BufferFactory<uint8_t> byte_buffer_factory(arena, MaxBufSize);
-packet::PacketFactory packet_factory(arena);
 
-rtp::FormatMap format_map(arena);
+core::SlabPool<packet::Packet> packet_pool("packet_pool", arena);
+core::SlabPool<core::Buffer>
+    packet_buffer_pool("packet_buffer_pool", arena, sizeof(core::Buffer) + MaxBufSize);
+core::SlabPool<core::Buffer>
+    frame_buffer_pool("frame_buffer_pool",
+                      arena,
+                      sizeof(core::Buffer) + MaxBufSize * sizeof(audio::sample_t));
+
+rtp::EncodingMap encoding_map(arena);
 
 class TaskIssuer : public IPipelineTaskCompleter {
 public:
@@ -49,7 +53,8 @@ public:
     }
 
     void start() {
-        task_create_slot_ = new SenderLoop::Tasks::CreateSlot();
+        SenderSlotConfig slot_config;
+        task_create_slot_ = new SenderLoop::Tasks::CreateSlot(slot_config);
         pipeline_.schedule(*task_create_slot_, *this);
     }
 
@@ -66,14 +71,14 @@ public:
             slot_ = task_create_slot_->get_handle();
             roc_panic_if_not(slot_);
             task_add_endpoint_ = new SenderLoop::Tasks::AddEndpoint(
-                slot_, address::Iface_AudioSource, address::Proto_RTP, dest_address_,
-                dest_writer_);
+                slot_, address::Iface_AudioSource, address::Proto_RTP, outbound_address_,
+                outbound_writer_);
             pipeline_.schedule(*task_add_endpoint_, *this);
             return;
         }
 
         if (&task == task_add_endpoint_) {
-            roc_panic_if_not(task_add_endpoint_->get_handle());
+            roc_panic_if(task_add_endpoint_->get_inbound_writer());
             task_delete_slot_ = new SenderLoop::Tasks::DeleteSlot(slot_);
             pipeline_.schedule(*task_delete_slot_, *this);
             return;
@@ -92,8 +97,8 @@ private:
 
     SenderLoop::SlotHandle slot_;
 
-    address::SocketAddr dest_address_;
-    packet::Queue dest_writer_;
+    address::SocketAddr outbound_address_;
+    packet::Queue outbound_writer_;
 
     SenderLoop::Tasks::CreateSlot* task_create_slot_;
     SenderLoop::Tasks::AddEndpoint* task_add_endpoint_;
@@ -107,21 +112,27 @@ private:
 TEST_GROUP(sender_loop) {
     test::MockScheduler scheduler;
 
-    SenderConfig config;
+    SenderSinkConfig config;
+
+    void setup() {
+        config.latency.tuner_backend = audio::LatencyTunerBackend_Niq;
+        config.latency.tuner_profile = audio::LatencyTunerProfile_Intact;
+    }
 };
 
 TEST(sender_loop, endpoints_sync) {
-    SenderLoop sender(scheduler, config, format_map, packet_factory, byte_buffer_factory,
-                      sample_buffer_factory, arena);
+    SenderLoop sender(scheduler, config, encoding_map, packet_pool, packet_buffer_pool,
+                      frame_buffer_pool, arena);
     CHECK(sender.is_valid());
 
     SenderLoop::SlotHandle slot = NULL;
 
-    address::SocketAddr dest_address;
-    packet::Queue dest_writer;
+    address::SocketAddr outbound_address;
+    packet::Queue outbound_writer;
 
     {
-        SenderLoop::Tasks::CreateSlot task;
+        SenderSlotConfig config;
+        SenderLoop::Tasks::CreateSlot task(config);
         CHECK(sender.schedule_and_wait(task));
         CHECK(task.success());
         CHECK(task.get_handle());
@@ -131,11 +142,11 @@ TEST(sender_loop, endpoints_sync) {
 
     {
         SenderLoop::Tasks::AddEndpoint task(slot, address::Iface_AudioSource,
-                                            address::Proto_RTP, dest_address,
-                                            dest_writer);
+                                            address::Proto_RTP, outbound_address,
+                                            outbound_writer);
         CHECK(sender.schedule_and_wait(task));
         CHECK(task.success());
-        CHECK(task.get_handle());
+        CHECK(!task.get_inbound_writer());
     }
 
     {
@@ -146,8 +157,8 @@ TEST(sender_loop, endpoints_sync) {
 }
 
 TEST(sender_loop, endpoints_async) {
-    SenderLoop sender(scheduler, config, format_map, packet_factory, byte_buffer_factory,
-                      sample_buffer_factory, arena);
+    SenderLoop sender(scheduler, config, encoding_map, packet_pool, packet_buffer_pool,
+                      frame_buffer_pool, arena);
     CHECK(sender.is_valid());
 
     TaskIssuer ti(sender);

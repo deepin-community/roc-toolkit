@@ -22,7 +22,7 @@ Options
 -o, --output=FILE_URI        Output file URI
 --input-format=FILE_FORMAT   Force input file format
 --output-format=FILE_FORMAT  Force output file format
---frame-length=TIME          Duration of the internal frames, TIME units
+--frame-len=TIME             Duration of the internal frames, TIME units
 -r, --rate=INT               Output sample rate, Hz
 --resampler-backend=ENUM     Resampler backend  (possible values="default", "builtin", "speex", "speexdec" default=`default')
 --resampler-profile=ENUM     Resampler profile  (possible values="low", "medium", "high" default=`medium')
@@ -59,6 +59,12 @@ The path component of the provided URI is `percent-decoded <https://en.wikipedia
 
 For example, the file named ``/foo/bar%/[baz]`` may be specified using either of the following URIs: ``file:///foo%2Fbar%25%2F%5Bbaz%5D`` and ``file:///foo/bar%25/[baz]``.
 
+Time units
+----------
+
+*TIME* should have one of the following forms:
+  123ns; 1.23us; 1.23ms; 1.23s; 1.23m; 1.23h;
+
 EXAMPLES
 ========
 
@@ -81,6 +87,17 @@ Input from stdin, output to stdout:
     $ roc-copy -vv --input-format=wav -i file:- \
         --output-format=wav -o file:- >./output.wav <./input.wav
 
+ENVIRONMENT VARIABLES
+=====================
+
+The following environment variables are supported:
+
+NO_COLOR
+    By default, terminal coloring is automatically detected. This environment variable can be set to a non-empty string to disable terminal coloring. It has lower precedence than ``--color`` option.
+
+FORCE_COLOR
+    By default, terminal coloring is automatically detected. This environment variable can be set to a positive integer to enable/force terminal coloring. It has lower precedence than  ``NO_COLOR`` variable and ``--color`` option.
+
 SEE ALSO
 ========
 
@@ -94,4 +111,4 @@ Please report any bugs found via GitHub (https://github.com/roc-streaming/roc-to
 AUTHORS
 =======
 
-See `authors <https://roc-streaming.org/toolkit/docs/about_project/authors.html>`_ page on the website for a list of maintainers and contributors.
+See authors page on the website for a list of maintainers and contributors (https://roc-streaming.org/toolkit/docs/about_project/authors.html).

@@ -88,29 +88,57 @@ RTCP* Packet::rtcp() {
     return NULL;
 }
 
-const core::Slice<uint8_t>& Packet::data() const {
-    if (!data_) {
+const core::Slice<uint8_t>& Packet::buffer() const {
+    if (!buffer_) {
         roc_panic("packet: data is null");
     }
-    return data_;
+    return buffer_;
 }
 
-void Packet::set_data(const core::Slice<uint8_t>& d) {
-    if (data_) {
+void Packet::set_buffer(const core::Slice<uint8_t>& d) {
+    if (buffer_) {
         roc_panic("packet: can't set data more than once");
     }
-    data_ = d;
+    buffer_ = d;
 }
 
-stream_source_t Packet::source() const {
+const core::Slice<uint8_t>& Packet::payload() const {
+    if (!buffer_) {
+        roc_panic("packet: data is null");
+    }
+
     if (const RTP* r = rtp()) {
-        return r->source;
+        return r->payload;
+    }
+
+    if (const RTCP* r = rtcp()) {
+        return r->payload;
+    }
+
+    if (const FEC* f = fec()) {
+        return f->payload;
+    }
+
+    return buffer_;
+}
+
+bool Packet::has_source_id() const {
+    if (rtp()) {
+        return true;
+    }
+
+    return false;
+}
+
+stream_source_t Packet::source_id() const {
+    if (const RTP* r = rtp()) {
+        return r->source_id;
     }
 
     return 0;
 }
 
-stream_timestamp_t Packet::begin() const {
+stream_timestamp_t Packet::stream_timestamp() const {
     if (const RTP* r = rtp()) {
         return r->stream_timestamp;
     }
@@ -118,9 +146,25 @@ stream_timestamp_t Packet::begin() const {
     return 0;
 }
 
-stream_timestamp_t Packet::end() const {
+stream_timestamp_t Packet::duration() const {
     if (const RTP* r = rtp()) {
-        return r->stream_timestamp + r->duration;
+        return r->duration;
+    }
+
+    return 0;
+}
+
+core::nanoseconds_t Packet::capture_timestamp() const {
+    if (const RTP* r = rtp()) {
+        return r->capture_timestamp;
+    }
+
+    return 0;
+}
+
+core::nanoseconds_t Packet::receive_timestamp() const {
+    if (const UDP* u = udp()) {
+        return u->receive_timestamp;
     }
 
     return 0;
@@ -140,6 +184,13 @@ int Packet::compare(const Packet& other) const {
     }
 
     return 0;
+}
+
+size_t Packet::approx_size(size_t n_samples) {
+    const size_t approx_header_size = 64;
+    const size_t approx_sample_size = 2;
+
+    return approx_header_size + n_samples * approx_sample_size;
 }
 
 } // namespace packet

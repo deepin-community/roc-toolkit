@@ -1,3 +1,63 @@
+roc-toolkit (0.4.0+dfsg-5) unstable; urgency=medium
+
+  * Disable libunwind integration (Closes: #1093375)
+  * Run autopkgtest as flaky on s390x
+
+ -- Dylan Aïssi <daissi@debian.org>  Sat, 25 Jan 2025 12:41:30 +0100
+
+roc-toolkit (0.4.0+dfsg-4) unstable; urgency=medium
+
+  * Disable autopkgtest on s390x for now:
+    Newly added roc_sndio tests only fail on s390x, so let's disable
+    tests on this architecture until upstream fixes them.
+
+ -- Dylan Aïssi <daissi@debian.org>  Wed, 03 Jul 2024 17:37:45 +0200
+
+roc-toolkit (0.4.0+dfsg-3) unstable; urgency=medium
+
+  * Upload to unstable
+
+ -- Dylan Aïssi <daissi@debian.org>  Sat, 29 Jun 2024 08:12:28 +0200
+
+roc-toolkit (0.4.0+dfsg-2) experimental; urgency=medium
+
+  * Require libunwind-dev << 14
+    roc-toolkit is not compatible with libunwind from llvm-toolchain,
+    so let's set a max version to ensure we use the one from the
+    package libunwind instead.
+
+ -- Dylan Aïssi <daissi@debian.org>  Wed, 19 Jun 2024 16:27:24 +0200
+
+roc-toolkit (0.4.0+dfsg-1) experimental; urgency=medium
+
+  * New upstream version 0.4.0+dfsg
+  * Bump SONAME to libroc0.4
+  * Update symbols file
+  * Add libsndfile1-dev in Build-Deps
+  * Refresh Don-t-strip-symbols.patch
+  * Add upstream/metadata
+  * Standards-Version: 4.7.0 (no changes required)
+  * Update copyright file
+  * Don't install the symlink "libroc.so.0" -> "libroc.so.0.X"
+      This symlink is undesirable since the soname is not "libroc.so.0"
+      but "libroc.so.0.X"; and usually versions 0.X break the API.
+
+ -- Dylan Aïssi <daissi@debian.org>  Sat, 15 Jun 2024 17:36:58 +0200
+
+roc-toolkit (0.3.0+dfsg-7) unstable; urgency=medium
+
+  * Add libopenfec-dev in Build-Deps
+
+ -- Dylan Aïssi <daissi@debian.org>  Thu, 18 Jan 2024 22:31:18 +0100
+
+roc-toolkit (0.3.0+dfsg-6) unstable; urgency=medium
+
+  [ Sebastien Bacher ]
+  * Install the upstream tests in a new binary and
+      use it for autopkgtests (Closes: #1059269)
+
+ -- Dylan Aïssi <daissi@debian.org>  Tue, 09 Jan 2024 20:38:04 +0100
+
 roc-toolkit (0.3.0+dfsg-5) unstable; urgency=medium
 
   [ Sebastien Bacher ]

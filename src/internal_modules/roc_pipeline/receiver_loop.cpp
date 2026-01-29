@@ -9,7 +9,6 @@
 #include "roc_pipeline/receiver_loop.h"
 #include "roc_core/log.h"
 #include "roc_core/panic.h"
-#include "roc_core/shared_ptr.h"
 #include "roc_core/thread.h"
 
 namespace roc {
@@ -20,14 +19,17 @@ ReceiverLoop::Task::Task()
     , slot_(NULL)
     , iface_(address::Iface_Invalid)
     , proto_(address::Proto_None)
-    , writer_(NULL)
+    , inbound_address_()
+    , inbound_writer_(NULL)
+    , outbound_writer_(NULL)
     , slot_metrics_(NULL)
-    , sess_metrics_(NULL)
-    , sess_metrics_size_(NULL) {
+    , party_metrics_(NULL)
+    , party_count_(NULL) {
 }
 
-ReceiverLoop::Tasks::CreateSlot::CreateSlot() {
+ReceiverLoop::Tasks::CreateSlot::CreateSlot(const ReceiverSlotConfig& slot_config) {
     func_ = &ReceiverLoop::task_create_slot_;
+    slot_config_ = slot_config;
 }
 
 ReceiverLoop::SlotHandle ReceiverLoop::Tasks::CreateSlot::get_handle() const {
@@ -48,21 +50,23 @@ ReceiverLoop::Tasks::DeleteSlot::DeleteSlot(SlotHandle slot) {
 
 ReceiverLoop::Tasks::QuerySlot::QuerySlot(SlotHandle slot,
                                           ReceiverSlotMetrics& slot_metrics,
-                                          ReceiverSessionMetrics* sess_metrics,
-                                          size_t* sess_metrics_size) {
+                                          ReceiverParticipantMetrics* party_metrics,
+                                          size_t* party_count) {
     func_ = &ReceiverLoop::task_query_slot_;
     if (!slot) {
         roc_panic("receiver loop: slot handle is null");
     }
     slot_ = (ReceiverSlot*)slot;
     slot_metrics_ = &slot_metrics;
-    sess_metrics_ = sess_metrics;
-    sess_metrics_size_ = sess_metrics_size;
+    party_metrics_ = party_metrics;
+    party_count_ = party_count;
 }
 
 ReceiverLoop::Tasks::AddEndpoint::AddEndpoint(SlotHandle slot,
                                               address::Interface iface,
-                                              address::Protocol proto) {
+                                              address::Protocol proto,
+                                              const address::SocketAddr& inbound_address,
+                                              packet::IWriter* outbound_writer) {
     func_ = &ReceiverLoop::task_add_endpoint_;
     if (!slot) {
         roc_panic("receiver loop: slot handle is null");
@@ -70,46 +74,47 @@ ReceiverLoop::Tasks::AddEndpoint::AddEndpoint(SlotHandle slot,
     slot_ = (ReceiverSlot*)slot;
     iface_ = iface;
     proto_ = proto;
+    inbound_address_ = inbound_address;
+    outbound_writer_ = outbound_writer;
 }
 
-packet::IWriter* ReceiverLoop::Tasks::AddEndpoint::get_writer() const {
+packet::IWriter* ReceiverLoop::Tasks::AddEndpoint::get_inbound_writer() const {
     if (!success()) {
         return NULL;
     }
-    roc_panic_if_not(writer_);
-    return writer_;
+    roc_panic_if_not(inbound_writer_);
+    return inbound_writer_;
 }
 
 ReceiverLoop::ReceiverLoop(IPipelineTaskScheduler& scheduler,
-                           const ReceiverConfig& config,
-                           const rtp::FormatMap& format_map,
-                           packet::PacketFactory& packet_factory,
-                           core::BufferFactory<uint8_t>& byte_buffer_factory,
-                           core::BufferFactory<audio::sample_t>& sample_buffer_factory,
+                           const ReceiverSourceConfig& source_config,
+                           const rtp::EncodingMap& encoding_map,
+                           core::IPool& packet_pool,
+                           core::IPool& packet_buffer_pool,
+                           core::IPool& frame_buffer_pool,
                            core::IArena& arena)
-    : PipelineLoop(scheduler, config.tasks, config.common.output_sample_spec)
-    , source_(config,
-              format_map,
-              packet_factory,
-              byte_buffer_factory,
-              sample_buffer_factory,
+    : PipelineLoop(
+        scheduler, source_config.pipeline_loop, source_config.common.output_sample_spec)
+    , source_(source_config,
+              encoding_map,
+              packet_pool,
+              packet_buffer_pool,
+              frame_buffer_pool,
               arena)
     , ticker_ts_(0)
-    , auto_reclock_(false)
+    , auto_reclock_(source_config.common.enable_auto_reclock)
     , valid_(false) {
     if (!source_.is_valid()) {
         return;
     }
 
-    if (config.common.enable_timing) {
-        ticker_.reset(new (ticker_)
-                          core::Ticker(config.common.output_sample_spec.sample_rate()));
+    if (source_config.common.enable_timing) {
+        ticker_.reset(new (ticker_) core::Ticker(
+            source_config.common.output_sample_spec.sample_rate()));
         if (!ticker_) {
             return;
         }
     }
-
-    auto_reclock_ = config.common.enable_auto_reclock;
 
     valid_ = true;
 }
@@ -122,6 +127,18 @@ sndio::ISource& ReceiverLoop::source() {
     roc_panic_if(!is_valid());
 
     return *this;
+}
+
+sndio::ISink* ReceiverLoop::to_sink() {
+    roc_panic_if(!is_valid());
+
+    return NULL;
+}
+
+sndio::ISource* ReceiverLoop::to_source() {
+    roc_panic_if(!is_valid());
+
+    return this;
 }
 
 sndio::DeviceType ReceiverLoop::type() const {
@@ -215,13 +232,14 @@ bool ReceiverLoop::read(audio::Frame& frame) {
 
     if (ticker_) {
         ticker_->wait(ticker_ts_);
-        ticker_ts_ += frame.num_samples() / source_.sample_spec().num_channels();
     }
 
     // invokes process_subframe_imp() and process_task_imp()
     if (!process_subframes_and_tasks(frame)) {
         return false;
     }
+
+    ticker_ts_ += frame.duration();
 
     if (auto_reclock_) {
         source_.reclock(core::timestamp(core::ClockUnix));
@@ -253,7 +271,7 @@ bool ReceiverLoop::process_task_imp(PipelineTask& basic_task) {
 }
 
 bool ReceiverLoop::task_create_slot_(Task& task) {
-    task.slot_ = source_.create_slot();
+    task.slot_ = source_.create_slot(task.slot_config_);
     return (bool)task.slot_;
 }
 
@@ -268,19 +286,19 @@ bool ReceiverLoop::task_query_slot_(Task& task) {
     roc_panic_if(!task.slot_);
     roc_panic_if(!task.slot_metrics_);
 
-    task.slot_->get_metrics(*task.slot_metrics_, task.sess_metrics_,
-                            task.sess_metrics_size_);
+    task.slot_->get_metrics(*task.slot_metrics_, task.party_metrics_, task.party_count_);
     return true;
 }
 
 bool ReceiverLoop::task_add_endpoint_(Task& task) {
     roc_panic_if(!task.slot_);
 
-    ReceiverEndpoint* endpoint = task.slot_->add_endpoint(task.iface_, task.proto_);
+    ReceiverEndpoint* endpoint = task.slot_->add_endpoint(
+        task.iface_, task.proto_, task.inbound_address_, task.outbound_writer_);
     if (!endpoint) {
         return false;
     }
-    task.writer_ = &endpoint->writer();
+    task.inbound_writer_ = &endpoint->inbound_writer();
     return true;
 }
 

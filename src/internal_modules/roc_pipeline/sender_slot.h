@@ -15,7 +15,7 @@
 #include "roc_address/interface.h"
 #include "roc_address/protocol.h"
 #include "roc_audio/fanout.h"
-#include "roc_core/buffer_factory.h"
+#include "roc_audio/frame_factory.h"
 #include "roc_core/iarena.h"
 #include "roc_core/noncopyable.h"
 #include "roc_core/optional.h"
@@ -25,6 +25,7 @@
 #include "roc_pipeline/metrics.h"
 #include "roc_pipeline/sender_endpoint.h"
 #include "roc_pipeline/sender_session.h"
+#include "roc_pipeline/state_tracker.h"
 
 namespace roc {
 namespace pipeline {
@@ -35,31 +36,28 @@ namespace pipeline {
 //!  - one or more related sender endpoints, one per each type
 //!  - one session associated with those endpoints
 class SenderSlot : public core::RefCounted<SenderSlot, core::ArenaAllocation>,
-                   public core::ListNode {
+                   public core::ListNode<> {
 public:
     //! Initialize.
-    SenderSlot(const SenderConfig& config,
-               const rtp::FormatMap& format_map,
+    SenderSlot(const SenderSinkConfig& sink_config,
+               const SenderSlotConfig& slot_config,
+               StateTracker& state_tracker,
+               const rtp::EncodingMap& encoding_map,
                audio::Fanout& fanout,
                packet::PacketFactory& packet_factory,
-               core::BufferFactory<uint8_t>& byte_buffer_factory,
-               core::BufferFactory<audio::sample_t>& sample_buffer_factory,
+               audio::FrameFactory& frame_factory,
                core::IArena& arena);
 
     ~SenderSlot();
 
+    //! Check if the slot was successfully constructed.
+    bool is_valid() const;
+
     //! Add endpoint.
     SenderEndpoint* add_endpoint(address::Interface iface,
                                  address::Protocol proto,
-                                 const address::SocketAddr& dest_address,
-                                 packet::IWriter& dest_writer);
-
-    //! Get audio writer.
-    //! @returns NULL if slot is not ready.
-    audio::IFrameWriter* writer();
-
-    //! Check if slot configuration is complete.
-    bool is_complete() const;
+                                 const address::SocketAddr& outbound_address,
+                                 packet::IWriter& outbound_writer);
 
     //! Refresh pipeline according to current time.
     //! @returns
@@ -67,22 +65,23 @@ public:
     //!  if there are no frames
     core::nanoseconds_t refresh(core::nanoseconds_t current_time);
 
-    //! Get metrics for slot and its session.
+    //! Get metrics for slot and its participants.
     void get_metrics(SenderSlotMetrics& slot_metrics,
-                     SenderSessionMetrics* sess_metrics) const;
+                     SenderParticipantMetrics* party_metrics,
+                     size_t* party_count) const;
 
 private:
     SenderEndpoint* create_source_endpoint_(address::Protocol proto,
-                                            const address::SocketAddr& dest_address,
-                                            packet::IWriter& dest_writer);
+                                            const address::SocketAddr& outbound_address,
+                                            packet::IWriter& outbound_writer);
     SenderEndpoint* create_repair_endpoint_(address::Protocol proto,
-                                            const address::SocketAddr& dest_address,
-                                            packet::IWriter& dest_writer);
+                                            const address::SocketAddr& outbound_address,
+                                            packet::IWriter& outbound_writer);
     SenderEndpoint* create_control_endpoint_(address::Protocol proto,
-                                             const address::SocketAddr& dest_address,
-                                             packet::IWriter& dest_writer);
+                                             const address::SocketAddr& outbound_address,
+                                             packet::IWriter& outbound_writer);
 
-    const SenderConfig& config_;
+    const SenderSinkConfig sink_config_;
 
     audio::Fanout& fanout_;
 
@@ -90,7 +89,10 @@ private:
     core::Optional<SenderEndpoint> repair_endpoint_;
     core::Optional<SenderEndpoint> control_endpoint_;
 
+    StateTracker& state_tracker_;
     SenderSession session_;
+
+    bool valid_;
 };
 
 } // namespace pipeline

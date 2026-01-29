@@ -18,7 +18,8 @@ ChannelSet::ChannelSet()
     , last_chan_(0)
     , layout_(ChanLayout_None)
     , order_(ChanOrder_None) {
-    memset(words_, 0, sizeof(words_));
+    clear_chans_();
+    index_chans_();
 }
 
 ChannelSet::ChannelSet(const ChannelLayout layout,
@@ -44,12 +45,9 @@ ChannelSet::ChannelSet(const ChannelLayout layout,
                   channel_layout_to_str(layout), (unsigned long)mask);
     }
 
+    clear_chans_();
     words_[0] = mask;
-    for (size_t n = 1; n < NumWords; n++) {
-        words_[n] = 0;
-    }
-
-    update_();
+    index_chans_();
 }
 
 bool ChannelSet::operator==(const ChannelSet& other) const {
@@ -67,10 +65,13 @@ bool ChannelSet::is_valid() const {
         return false;
 
     case ChanLayout_Surround:
-        if (order_ == ChanOrder_None) {
+        if (order_ <= ChanOrder_None || order_ >= ChanOrder_Max) {
             return false;
         }
         if (num_chans_ == 0) {
+            return false;
+        }
+        if (last_chan_ >= ChanPos_Max) {
             return false;
         }
         break;
@@ -92,9 +93,8 @@ void ChannelSet::clear() {
     layout_ = ChanLayout_None;
     order_ = ChanOrder_None;
 
-    memset(words_, 0, sizeof(words_));
-
-    update_();
+    clear_chans_();
+    index_chans_();
 }
 
 ChannelLayout ChannelSet::layout() const {
@@ -150,6 +150,14 @@ size_t ChannelSet::last_channel() const {
     return last_chan_;
 }
 
+bool ChannelSet::is_equal(ChannelMask mask) const {
+    if (last_chan_ >= WordBits) {
+        return false;
+    }
+
+    return (words_[0] == mask);
+}
+
 bool ChannelSet::is_subset(ChannelMask mask) const {
     if (last_chan_ >= WordBits) {
         return false;
@@ -166,7 +174,71 @@ bool ChannelSet::is_superset(ChannelMask mask) const {
     return ((words_[0] & mask) == mask);
 }
 
-void ChannelSet::set_channel(const size_t n, const bool enabled) {
+void ChannelSet::set_mask(const ChannelMask mask) {
+    clear_chans_();
+
+    words_[0] = mask;
+
+    index_chans_();
+}
+
+void ChannelSet::set_range(size_t from, size_t to) {
+    if (from >= MaxChannels || to >= MaxChannels) {
+        roc_panic("channel set: subscript out of range: from=%lu to=%lu max_channels=%lu",
+                  (unsigned long)from, (unsigned long)to, (unsigned long)MaxChannels);
+    }
+    if (from > to) {
+        roc_panic("channel set: invalid range: from=%lu to=%lu", (unsigned long)from,
+                  (unsigned long)to);
+    }
+
+    clear_chans_();
+
+    for (size_t n = from; n <= to; n++) {
+        words_[n / WordBits] |= (word_t(1) << (n % WordBits));
+    }
+
+    index_chans_();
+}
+
+void ChannelSet::set_count(size_t count) {
+    if (count >= MaxChannels) {
+        roc_panic("channel set: subscript out of range: count=%lu max_channels=%lu",
+                  (unsigned long)count, (unsigned long)MaxChannels);
+    }
+
+    switch (count) {
+    case 0:
+        set_mask(0);
+        break;
+    case 1:
+        set_mask(ChanMask_Surround_Mono);
+        break;
+    case 2:
+        set_mask(ChanMask_Surround_Stereo);
+        break;
+    case 3:
+        set_mask(ChanMask_Surround_3_0);
+        break;
+    case 4:
+        set_mask(ChanMask_Surround_4_0);
+        break;
+    case 5:
+        set_mask(ChanMask_Surround_5_0);
+        break;
+    case 6:
+        set_mask(ChanMask_Surround_6_0);
+        break;
+    case 7:
+        set_mask(ChanMask_Surround_7_0);
+        break;
+    default:
+        set_range(0, count - 1);
+        break;
+    }
+}
+
+void ChannelSet::toggle_channel(const size_t n, const bool enabled) {
     if (n >= MaxChannels) {
         roc_panic("channel set: subscript out of range: channel=%lu max_channels=%lu",
                   (unsigned long)n, (unsigned long)MaxChannels);
@@ -178,12 +250,12 @@ void ChannelSet::set_channel(const size_t n, const bool enabled) {
         words_[n / WordBits] &= ~(word_t(1) << (n % WordBits));
     }
 
-    update_();
+    index_chans_();
 }
 
-void ChannelSet::set_channel_range(const size_t from,
-                                   const size_t to,
-                                   const bool enabled) {
+void ChannelSet::toggle_channel_range(const size_t from,
+                                      const size_t to,
+                                      const bool enabled) {
     if (from >= MaxChannels || to >= MaxChannels) {
         roc_panic("channel set: subscript out of range: from=%lu to=%lu max_channels=%lu",
                   (unsigned long)from, (unsigned long)to, (unsigned long)MaxChannels);
@@ -201,21 +273,7 @@ void ChannelSet::set_channel_range(const size_t from,
         }
     }
 
-    update_();
-}
-
-void ChannelSet::set_channel_mask(const ChannelMask mask) {
-    if (mask == 0) {
-        roc_panic("channel set: invalid channel mask");
-    }
-
-    words_[0] = mask;
-
-    for (size_t n = 1; n < NumWords; n++) {
-        words_[n] = 0;
-    }
-
-    update_();
+    index_chans_();
 }
 
 void ChannelSet::bitwise_and(const ChannelSet& other) {
@@ -223,7 +281,7 @@ void ChannelSet::bitwise_and(const ChannelSet& other) {
         words_[n] &= other.words_[n];
     }
 
-    update_();
+    index_chans_();
 }
 
 void ChannelSet::bitwise_or(const ChannelSet& other) {
@@ -231,7 +289,7 @@ void ChannelSet::bitwise_or(const ChannelSet& other) {
         words_[n] |= other.words_[n];
     }
 
-    update_();
+    index_chans_();
 }
 
 void ChannelSet::bitwise_xor(const ChannelSet& other) {
@@ -239,7 +297,7 @@ void ChannelSet::bitwise_xor(const ChannelSet& other) {
         words_[n] ^= other.words_[n];
     }
 
-    update_();
+    index_chans_();
 }
 
 size_t ChannelSet::num_bytes() const {
@@ -255,7 +313,11 @@ uint8_t ChannelSet::byte_at(size_t n) const {
     return (words_[n / WordBytes] >> ((n % WordBytes) * 8)) & 0xff;
 }
 
-void ChannelSet::update_() {
+void ChannelSet::clear_chans_() {
+    memset(words_, 0, sizeof(words_));
+}
+
+void ChannelSet::index_chans_() {
     num_chans_ = first_chan_ = last_chan_ = 0;
 
     bool has_first = false;

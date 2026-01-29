@@ -17,8 +17,8 @@
 #include "roc_address/socket_addr.h"
 #include "roc_core/atomic.h"
 #include "roc_core/attributes.h"
-#include "roc_core/buffer_factory.h"
 #include "roc_core/iarena.h"
+#include "roc_core/ipool.h"
 #include "roc_core/list.h"
 #include "roc_core/mpsc_queue.h"
 #include "roc_core/mpsc_queue_node.h"
@@ -36,8 +36,7 @@
 #include "roc_netio/resolver.h"
 #include "roc_netio/tcp_connection_port.h"
 #include "roc_netio/tcp_server_port.h"
-#include "roc_netio/udp_receiver_port.h"
-#include "roc_netio/udp_sender_port.h"
+#include "roc_netio/udp_port.h"
 #include "roc_packet/iwriter.h"
 #include "roc_packet/packet_factory.h"
 
@@ -58,54 +57,58 @@ public:
     //! Subclasses for specific tasks.
     class Tasks {
     public:
-        //! Add UDP datagram receiver port.
-        class AddUdpReceiverPort : public NetworkTask {
-        public:
-            //! Set task parameters.
-            //! @remarks
-            //!  - Updates @p config with the actual bind address.
-            //!  - Passes received packets to @p writer. It is called from network thread.
-            //!    It should not block the caller.
-            AddUdpReceiverPort(UdpReceiverConfig& config, packet::IWriter& writer);
-
-            //! Get created port handle.
-            //! @pre
-            //!  Should be called only if success() is true.
-            PortHandle get_handle() const;
-
-        private:
-            friend class NetworkLoop;
-
-            UdpReceiverConfig* config_;
-            packet::IWriter* writer_;
-        };
-
-        //! Add UDP datagram sender port.
-        class AddUdpSenderPort : public NetworkTask {
+        //! Add UDP datagram sender/receiver port.
+        class AddUdpPort : public NetworkTask {
         public:
             //! Set task parameters.
             //! @remarks
             //!  Updates @p config with the actual bind address.
-            AddUdpSenderPort(UdpSenderConfig& config);
+            AddUdpPort(UdpConfig& config);
 
             //! Get created port handle.
             //! @pre
-            //!  Should be called only if success() is true.
+            //!  Should be called only after success() is true.
             PortHandle get_handle() const;
-
-            //! Get created port writer;
-            //! @remarks
-            //!  The writer can be used to send packets from the port. It may be called
-            //!  from any thread. It will not block the caller.
-            //! @pre
-            //!  Should be called only if success() is true.
-            packet::IWriter* get_writer() const;
 
         private:
             friend class NetworkLoop;
 
-            UdpSenderConfig* config_;
-            packet::IWriter* writer_;
+            UdpConfig* config_;
+        };
+
+        //! Start sending on UDP port.
+        class StartUdpSend : public NetworkTask {
+        public:
+            //! Set task parameters.
+            //! @remarks
+            //!  get_outbound_writer() returns a writer for packets to be send. It may be
+            //!  used from another thread. It doesn't block the caller
+            StartUdpSend(PortHandle handle);
+
+            //! Get created writer for outbound packets.
+            //! @pre
+            //!  Should be called only after success() is true.
+            packet::IWriter& get_outbound_writer() const;
+
+        private:
+            friend class NetworkLoop;
+
+            packet::IWriter* outbound_writer_;
+        };
+
+        //! Start receiving on UDP port.
+        class StartUdpRecv : public NetworkTask {
+        public:
+            //! Set task parameters.
+            //! @remarks
+            //!  Received packets will be passed to @p inbound_writer.
+            //!  It is invoked from network thread. It should not block the caller.
+            StartUdpRecv(PortHandle handle, packet::IWriter& inbound_writer);
+
+        private:
+            friend class NetworkLoop;
+
+            packet::IWriter* inbound_writer_;
         };
 
         //! Add TCP server port.
@@ -121,7 +124,7 @@ public:
 
             //! Get created port handle.
             //! @pre
-            //!  Should be called only if success() is true.
+            //!  Should be called only after success() is true.
             PortHandle get_handle() const;
 
         private:
@@ -142,7 +145,7 @@ public:
 
             //! Get created port handle.
             //! @pre
-            //!  Should be called only if success() is true.
+            //!  Should be called only after success() is true.
             PortHandle get_handle() const;
 
         private:
@@ -173,7 +176,7 @@ public:
 
             //! Get resolved address.
             //! @pre
-            //!  Should be called only if success() is true.
+            //!  Should be called only after success() is true.
             const address::SocketAddr& get_address() const;
 
         private:
@@ -186,9 +189,7 @@ public:
     //! Initialize.
     //! @remarks
     //!  Start background thread if the object was successfully constructed.
-    NetworkLoop(packet::PacketFactory& packet_factory,
-                core::BufferFactory<uint8_t>& buffer_factory,
-                core::IArena& arena);
+    NetworkLoop(core::IPool& packet_pool, core::IPool& buffer_pool, core::IArena& arena);
 
     //! Destroy. Stop all receivers and senders.
     //! @remarks
@@ -238,15 +239,15 @@ private:
     void close_all_sems_();
     void close_all_ports_();
 
-    void task_add_udp_receiver_(NetworkTask&);
-    void task_add_udp_sender_(NetworkTask&);
-    void task_remove_port_(NetworkTask&);
+    void task_add_udp_port_(NetworkTask&);
+    void task_start_udp_send_(NetworkTask&);
+    void task_start_udp_recv_(NetworkTask&);
     void task_add_tcp_server_(NetworkTask&);
     void task_add_tcp_client_(NetworkTask&);
+    void task_remove_port_(NetworkTask&);
     void task_resolve_endpoint_address_(NetworkTask&);
 
-    packet::PacketFactory& packet_factory_;
-    core::BufferFactory<uint8_t>& buffer_factory_;
+    packet::PacketFactory packet_factory_;
     core::IArena& arena_;
 
     bool started_;

@@ -38,7 +38,7 @@ int roc_receiver_open(roc_context* context,
         return -1;
     }
 
-    pipeline::ReceiverConfig imp_config;
+    pipeline::ReceiverSourceConfig imp_config;
     if (!api::receiver_config_from_user(*imp_context, imp_config, *config)) {
         roc_log(LogError, "roc_receiver_open(): invalid arguments: bad config");
         return -1;
@@ -85,8 +85,8 @@ int roc_receiver_configure(roc_receiver* receiver,
         return -1;
     }
 
-    netio::UdpReceiverConfig imp_config;
-    if (!api::receiver_interface_config_from_user(imp_config, *config)) {
+    netio::UdpConfig imp_config;
+    if (!api::interface_config_from_user(imp_config, *config)) {
         roc_log(LogError, "roc_receiver_configure(): invalid arguments: bad config");
         return -1;
     }
@@ -149,29 +149,29 @@ int roc_receiver_unlink(roc_receiver* receiver, roc_slot slot) {
 
 int roc_receiver_query(roc_receiver* receiver,
                        roc_slot slot,
-                       roc_receiver_metrics* metrics) {
+                       roc_receiver_metrics* slot_metrics,
+                       roc_connection_metrics* conn_metrics,
+                       size_t* conn_metrics_count) {
     if (!receiver) {
         roc_log(LogError, "roc_receiver_query(): invalid arguments: receiver is null");
         return -1;
     }
 
-    if (!metrics) {
-        roc_log(LogError, "roc_receiver_query(): invalid arguments: metrics are null");
+    if (conn_metrics && !conn_metrics_count) {
+        roc_log(LogError,
+                "roc_receiver_query(): invalid arguments:"
+                " conn_metrics is non-null, but conn_metrics_count is null");
         return -1;
     }
 
     node::Receiver* imp_receiver = (node::Receiver*)receiver;
 
-    pipeline::ReceiverSlotMetrics slot_metrics;
-
-    if (!imp_receiver->get_metrics(slot, slot_metrics,
-                                   api::receiver_session_metrics_to_user,
-                                   &metrics->sessions_size, metrics->sessions)) {
+    if (!imp_receiver->get_metrics(slot, api::receiver_slot_metrics_to_user, slot_metrics,
+                                   api::receiver_participant_metrics_to_user,
+                                   conn_metrics_count, conn_metrics)) {
         roc_log(LogError, "roc_receiver_query(): operation failed");
         return -1;
     }
-
-    api::receiver_slot_metrics_to_user(*metrics, slot_metrics);
 
     return 0;
 }
@@ -206,7 +206,8 @@ int roc_receiver_read(roc_receiver* receiver, roc_frame* frame) {
     }
 
     if (!frame->samples) {
-        roc_log(LogError, "roc_receiver_read(): invalid arguments: samples is null");
+        roc_log(LogError,
+                "roc_receiver_read(): invalid arguments: frame samples buffer is null");
         return -1;
     }
 

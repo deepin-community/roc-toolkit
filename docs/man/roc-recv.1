@@ -27,7 +27,7 @@ level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .in \\n[rst2man-indent\\n[rst2man-indent-level]]u
 ..
-.TH "ROC-RECV" "1" "2023" "Roc Toolkit 0.3" "Roc Toolkit"
+.TH "ROC-RECV" "1" "2024" "Roc Toolkit 0.4" "Roc Toolkit"
 .SH NAME
 roc-recv \- receive real-time audio
 .SH SYNOPSIS
@@ -78,14 +78,14 @@ IPv4 or IPv6 address of the network interface on which to join the multicast gro
 .B  \-\-reuseaddr
 enable SO_REUSEADDR when binding sockets
 .TP
-.BI \-\-sess\-latency\fB= STRING
-Session target latency, TIME units
+.BI \-\-target\-latency\fB= STRING
+Target latency, TIME units
 .TP
 .BI \-\-io\-latency\fB= STRING
 Playback target latency, TIME units
 .TP
 .BI \-\-latency\-tolerance\fB= STRING
-Maximum latency deviation, TIME units
+Maximum deviation from target latency, TIME units
 .TP
 .BI \-\-no\-play\-timeout\fB= STRING
 No playback timeout, TIME units
@@ -93,23 +93,23 @@ No playback timeout, TIME units
 .BI \-\-choppy\-play\-timeout\fB= STRING
 Choppy playback timeout, TIME units
 .TP
-.BI \-\-packet\-limit\fB= INT
-Maximum packet size, in bytes
-.TP
-.BI \-\-frame\-limit\fB= INT
-Maximum internal frame size, in bytes
-.TP
-.BI \-\-frame\-length\fB= TIME
+.BI \-\-frame\-len\fB= TIME
 Duration of the internal frames, TIME units
+.TP
+.BI \-\-max\-packet\-size\fB= SIZE
+Maximum packet size, in SIZE units
+.TP
+.BI \-\-max\-frame\-size\fB= SIZE
+Maximum internal frame size, in SIZE units
 .TP
 .BI \-\-rate\fB= INT
 Override output sample rate, Hz
 .TP
-.BI \-\-clock\-backend\fB= ENUM
-Clock synchronization backend  (possible values=\(dqdisable\(dq, \(dqniq\(dq default=\(ganiq\(aq)
+.BI \-\-latency\-backend\fB= ENUM
+Which latency to use in latency tuner (possible values=\(dqniq\(dq default=\(ganiq\(aq)
 .TP
-.BI \-\-clock\-profile\fB= ENUM
-Clock synchronization profile  (possible values=\(dqdefault\(dq, \(dqresponsive\(dq, \(dqgradual\(dq default=\(gadefault\(aq)
+.BI \-\-latency\-profile\fB= ENUM
+Latency tuning profile  (possible values=\(dqdefault\(dq, \(dqresponsive\(dq, \(dqgradual\(dq, \(dqintact\(dq default=\(gadefault\(aq)
 .TP
 .BI \-\-resampler\-backend\fB= ENUM
 Resampler backend  (possible values=\(dqdefault\(dq, \(dqbuiltin\(dq, \(dqspeex\(dq, \(dqspeexdec\(dq default=\(gadefault\(aq)
@@ -260,7 +260,13 @@ Backup file is restarted from the beginning each time when the last session disc
 .INDENT 0.0
 .TP
 .B \fITIME\fP should have one of the following forms:
-123ns, 123us, 123ms, 123s, 123m, 123h
+123ns; 1.23us; 1.23ms; 1.23s; 1.23m; 1.23h;
+.UNINDENT
+.SS Size units
+.INDENT 0.0
+.TP
+.B \fISIZE\fP should have one of the following forms:
+123; 1.23K; 1.23M; 1.23G;
 .UNINDENT
 .SH EXAMPLES
 .SS Endpoint examples
@@ -474,7 +480,7 @@ Select lower session latency:
 .sp
 .nf
 .ft C
-$ roc\-recv \-vv \-s rtp://0.0.0.0:10001 \-\-sess\-latency=50ms
+$ roc\-recv \-vv \-s rtp://0.0.0.0:10001 \-\-target\-latency=50ms
 .ft P
 .fi
 .UNINDENT
@@ -487,7 +493,7 @@ Select lower I/O latency and frame length:
 .nf
 .ft C
 $ roc\-recv \-vv \-s rtp://0.0.0.0:10001 \e
-    \-\-io\-latency=20ms \-\-frame\-length 4ms
+    \-\-io\-latency=20ms \-\-frame\-len 4ms
 .ft P
 .fi
 .UNINDENT
@@ -500,8 +506,8 @@ Manually specify thresholds and timeouts:
 .nf
 .ft C
 $ roc\-recv \-vv \-s rtp://0.0.0.0:10001 \e
-    \-\-sess\-latency=50ms \-\-latency\-tolerance=20ms \e
-    \-\-no\-play\-timeout=200s \-\-choppy\-play\-timeout=500ms
+    \-\-target\-latency=50ms \-\-min\-latency=40ms \-\-max\-latency 60ms \e
+    \-\-no\-play\-timeout=200ms \-\-choppy\-play\-timeout=500ms
 .ft P
 .fi
 .UNINDENT
@@ -520,17 +526,28 @@ $ roc\-recv \-vv \-s rtp://0.0.0.0:10001 \e
 .UNINDENT
 .UNINDENT
 .sp
-Manually specify clock synchronization parameters:
+Manually specify latency tuning parameters:
 .INDENT 0.0
 .INDENT 3.5
 .sp
 .nf
 .ft C
 $ roc\-recv \-vv \-s rtp://0.0.0.0:10001 \e
-    \-\-clock\-backend=niq \-\-clock\-profile=gradual
+    \-\-latency\-backend=niq \-\-latency\-profile=gradual
 .ft P
 .fi
 .UNINDENT
+.UNINDENT
+.SH ENVIRONMENT VARIABLES
+.sp
+The following environment variables are supported:
+.INDENT 0.0
+.TP
+.B NO_COLOR
+By default, terminal coloring is automatically detected. This environment variable can be set to a non\-empty string to disable terminal coloring. It has lower precedence than \fB\-\-color\fP option.
+.TP
+.B FORCE_COLOR
+By default, terminal coloring is automatically detected. This environment variable can be set to a positive integer to enable/force terminal coloring. It has lower precedence than  \fBNO_COLOR\fP variable and \fB\-\-color\fP option.
 .UNINDENT
 .SH SEE ALSO
 .sp
@@ -540,8 +557,8 @@ $ roc\-recv \-vv \-s rtp://0.0.0.0:10001 \e
 Please report any bugs found via GitHub (\fI\%https://github.com/roc\-streaming/roc\-toolkit/\fP).
 .SH AUTHORS
 .sp
-See \fI\%authors\fP page on the website for a list of maintainers and contributors.
+See authors page on the website for a list of maintainers and contributors (\fI\%https://roc\-streaming.org/toolkit/docs/about_project/authors.html\fP).
 .SH COPYRIGHT
-2023, Roc Streaming authors
+2024, Roc Streaming authors
 .\" Generated by docutils manpage writer.
 .

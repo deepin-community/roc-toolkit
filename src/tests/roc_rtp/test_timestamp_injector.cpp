@@ -8,7 +8,6 @@
 
 #include <CppUTest/TestHarness.h>
 
-#include "roc_core/buffer_factory.h"
 #include "roc_core/heap_arena.h"
 #include "roc_core/macro_helpers.h"
 #include "roc_core/scoped_ptr.h"
@@ -17,7 +16,7 @@
 #include "roc_packet/queue.h"
 #include "roc_packet/units.h"
 #include "roc_rtp/composer.h"
-#include "roc_rtp/format_map.h"
+#include "roc_rtp/encoding_map.h"
 #include "roc_rtp/parser.h"
 #include "roc_rtp/timestamp_injector.h"
 #include "roc_status/status_code.h"
@@ -28,8 +27,10 @@ namespace rtp {
 
 namespace {
 
+enum { MaxBufSize = 100 };
+
 core::HeapArena arena;
-static packet::PacketFactory packet_factory(arena);
+packet::PacketFactory packet_factory(arena, MaxBufSize);
 
 packet::PacketPtr new_packet(packet::seqnum_t sn, packet::stream_timestamp_t ts) {
     packet::PacketPtr packet = packet_factory.new_packet();
@@ -52,8 +53,9 @@ TEST(timestamp_injector, failed_to_read_packet) {
         SampleRate = 10000,
     };
 
-    const audio::SampleSpec sample_spec = audio::SampleSpec(
-        SampleRate, audio::ChanLayout_Surround, audio::ChanOrder_Smpte, ChMask);
+    const audio::SampleSpec sample_spec =
+        audio::SampleSpec(SampleRate, audio::Sample_RawFormat, audio::ChanLayout_Surround,
+                          audio::ChanOrder_Smpte, ChMask);
 
     const status::StatusCode codes[] = {
         status::StatusUnknown,
@@ -79,8 +81,9 @@ TEST(timestamp_injector, negative_and_positive_dn) {
     };
 
     const float sample_rate = 48000.;
-    const audio::SampleSpec sample_spec = audio::SampleSpec(
-        (size_t)sample_rate, audio::ChanLayout_Surround, audio::ChanOrder_Smpte, ChMask);
+    const audio::SampleSpec sample_spec =
+        audio::SampleSpec((size_t)sample_rate, audio::Sample_RawFormat,
+                          audio::ChanLayout_Surround, audio::ChanOrder_Smpte, ChMask);
 
     packet::stream_timestamp_t rtp_ts = 2222;
     packet::stream_timestamp_t packet_rtp_ts = (packet::stream_timestamp_t)-4444;

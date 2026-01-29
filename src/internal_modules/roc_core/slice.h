@@ -13,7 +13,7 @@
 #define ROC_CORE_SLICE_H_
 
 #include "roc_core/buffer.h"
-#include "roc_core/print_buffer.h"
+#include "roc_core/print_memory.h"
 #include "roc_core/shared_ptr.h"
 
 namespace roc {
@@ -21,35 +21,36 @@ namespace core {
 
 //! Slice.
 //!
-//! Slice<T> points to a subrange of data in Buffer<T>, where T defines the
-//! element type, e.g. uint8_t for byte buffer.
-//!
+//! Slice points to a subrange of data in pool-allocated Buffer.
 //! Copying a slice produces a new slice referring the same data.
 //!
-//! Slice also acts as a kind of shared pointer to Buffer. A buffer wont be freed
+//! Slice also acts as a kind of shared pointer to Buffer. A buffer won't be freed
 //! (returned to pool) until there are slices referring it. Copying a slice
 //! increments the buffer reference counter, and destroying a slice decrements it.
 //!
+//! While Buffer works with raw bytes, Slice<T> interprets it as array of elements
+//! of type T, and works in terms of those elements.
+//!
 //! Slice has two important characteristics:
-//!  - size - the difference between the ending end beginning pointers
+//!  - size - the difference between the ending end beginning pointer
 //!  - capacity - the difference between the actual buffer end and the
-//!               slice beginning pointers
+//!               slice beginning pointer
 //!
 //! Buffers are not resizable. They're allocated from pool and have fixed size,
 //! defined by the pool parameters.
 //!
-//! Slices are resliceable, which means that their pointers to the buffer data
-//! may be moved withing the buffer.
+//! Slices are reslicable, which means that their pointers to the buffer data
+//! may be moved within the buffer.
 //!
 //! The beginning pointer may be moved only forward. Once moved, it's not allowed
 //! to move it backward again. Moving it decreases the slice size and capacity.
 //! Capacity is affected because it's relative to the beginning pointer.
 //!
-//! The ending pointer maybe freely moved forward and backward withing the slice
+//! The ending pointer may be freely moved forward and backward within the slice
 //! capacity. Moving it affects the slice size, but not capacity.
 //!
 //! In other words, slice capacity may be only decreased by moving beginning pointer,
-//! and slice size may be freely changed withing the slice capacity by moving both
+//! and slice size may be freely changed within the slice capacity by moving both
 //! beginning and ending pointers.
 template <class T> class Slice {
 public:
@@ -61,11 +62,11 @@ public:
     }
 
     //! Construct slice pointing to the whole buffer.
-    Slice(const SharedPtr<Buffer<T> >& buffer) {
+    Slice(const BufferPtr& buffer) {
         buffer_ = buffer;
         if (buffer_) {
-            data_ = buffer->data();
-            size_ = buffer->size();
+            data_ = (T*)buffer->data();
+            size_ = buffer->size() / sizeof(T);
         } else {
             data_ = NULL;
             size_ = 0;
@@ -73,18 +74,18 @@ public:
     }
 
     //! Construct slice pointing to a part of a buffer.
-    Slice(Buffer<T>& buffer, size_t from, size_t to) {
+    Slice(Buffer& buffer, size_t from, size_t to) {
         if (from > to) {
             roc_panic("slice: invalid range: [%lu,%lu)", (unsigned long)from,
                       (unsigned long)to);
         }
-        if (to > buffer.size()) {
+        if (to > buffer.size() / sizeof(T)) {
             roc_panic("slice: out of bounds: available=[%lu,%lu) requested=[%lu,%lu)",
-                      (unsigned long)0, (unsigned long)buffer.size(), (unsigned long)from,
-                      (unsigned long)to);
+                      (unsigned long)0, (unsigned long)buffer.size() / sizeof(T),
+                      (unsigned long)from, (unsigned long)to);
         }
         buffer_ = &buffer;
-        data_ = buffer.data() + from;
+        data_ = (T*)buffer.data() + from;
         size_ = to - from;
     }
 
@@ -114,7 +115,7 @@ public:
         if (data_ == NULL) {
             return 0;
         } else {
-            return buffer_->size() - size_t(data_ - buffer_->data());
+            return buffer_->size() / sizeof(T) - size_t(data_ - (T*)buffer_->data());
         }
     }
 
@@ -178,9 +179,10 @@ public:
     //! Print slice to stderr.
     void print() const {
         if (buffer_) {
-            core::print_buffer_slice(data_, size_, buffer_->data(), buffer_->size());
+            core::print_memory_slice(data_, size_, (T*)buffer_->data(),
+                                     buffer_->size() / sizeof(T));
         } else {
-            core::print_buffer_slice(data_, size_, NULL, 0);
+            core::print_memory_slice(data_, size_, NULL, 0);
         }
     }
 
@@ -204,7 +206,7 @@ public:
     }
 
 private:
-    SharedPtr<Buffer<T> > buffer_;
+    BufferPtr buffer_;
     T* data_;
     size_t size_;
 };
