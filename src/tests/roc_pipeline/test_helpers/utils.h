@@ -13,6 +13,7 @@
 
 #include "roc_address/socket_addr.h"
 #include "roc_audio/sample.h"
+#include "roc_audio/sample_spec.h"
 #include "roc_core/stddefs.h"
 #include "roc_core/time.h"
 
@@ -24,7 +25,7 @@ namespace {
 
 const double SampleEpsilon = 0.00001;
 
-const core::nanoseconds_t TimestampEpsilon = core::Microsecond;
+const size_t TimestampEpsilonSmpls = 1;
 
 inline audio::sample_t nth_sample(uint8_t n) {
     return audio::sample_t(n) / 1024;
@@ -38,7 +39,10 @@ inline address::SocketAddr new_address(int port) {
 
 inline void expect_capture_timestamp(core::nanoseconds_t expected,
                                      core::nanoseconds_t actual,
-                                     core::nanoseconds_t epsilon) {
+                                     const audio::SampleSpec& sample_spec,
+                                     const size_t epsilon_smpls) {
+    const core::nanoseconds_t epsilon = sample_spec.samples_per_chan_2_ns(epsilon_smpls);
+
     if (!core::ns_equal_delta(expected, actual, epsilon)) {
         char sbuff[256];
         snprintf(sbuff, sizeof(sbuff),

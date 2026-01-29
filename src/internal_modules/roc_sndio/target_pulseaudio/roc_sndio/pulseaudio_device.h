@@ -21,44 +21,64 @@
 #include "roc_core/time.h"
 #include "roc_packet/units.h"
 #include "roc_sndio/config.h"
-#include "roc_sndio/device_state.h"
-#include "roc_sndio/device_type.h"
+#include "roc_sndio/isink.h"
+#include "roc_sndio/isource.h"
 
 namespace roc {
 namespace sndio {
 
 //! PulseAudio device.
-//! Base class for PulseAudio source and sink.
-class PulseaudioDevice : public core::NonCopyable<> {
+//! Can be either source or sink depending on constructor parameter.
+class PulseaudioDevice : public ISink, public ISource, public core::NonCopyable<> {
 public:
-    //! Open output device.
-    bool open(const char* device);
-
-protected:
     //! Initialize.
     PulseaudioDevice(const Config& config, DeviceType device_type);
     ~PulseaudioDevice();
 
+    //! Open output device.
+    bool open(const char* device);
+
+    //! Cast IDevice to ISink.
+    virtual ISink* to_sink();
+
+    //! Cast IDevice to ISink.
+    virtual ISource* to_source();
+
+    //! Get device type.
+    virtual DeviceType type() const;
+
     //! Get device state.
-    DeviceState state() const;
+    virtual DeviceState state() const;
 
     //! Pause reading.
-    void pause();
+    virtual void pause();
 
     //! Resume paused reading.
-    bool resume();
+    virtual bool resume();
 
     //! Restart reading from the beginning.
-    bool restart();
+    virtual bool restart();
 
     //! Get sample specification of the sink.
-    audio::SampleSpec sample_spec() const;
+    virtual audio::SampleSpec sample_spec() const;
 
     //! Get latency of the sink.
-    core::nanoseconds_t latency() const;
+    virtual core::nanoseconds_t latency() const;
 
-    //! Process audio frame.
-    bool request(audio::Frame& frame);
+    //! Check if the device supports latency reports.
+    virtual bool has_latency() const;
+
+    //! Check if the device has own clock.
+    virtual bool has_clock() const;
+
+    //! Adjust source clock to match consumer clock.
+    virtual void reclock(core::nanoseconds_t timestamp);
+
+    //! Write audio frame.
+    virtual void write(audio::Frame& frame);
+
+    //! Read audio frame.
+    virtual bool read(audio::Frame& frame);
 
 private:
     static void context_state_cb_(pa_context* context, void* userdata);
@@ -90,8 +110,8 @@ private:
     bool start_device_info_op_();
     void cancel_device_info_op_();
 
-    void init_stream_params_(const pa_sample_spec& device_sample_spec);
-    bool check_stream_params_() const;
+    bool load_device_params_(const pa_sample_spec& device_spec);
+    void init_stream_params_(const pa_sample_spec& device_spec);
     bool open_stream_();
     void close_stream_();
     ssize_t request_stream_(audio::sample_t* data, size_t size);
@@ -108,15 +128,20 @@ private:
     const DeviceType device_type_;
     const char* device_;
 
-    Config config_;
-    size_t frame_size_;
+    audio::SampleSpec sample_spec_;
+
+    core::nanoseconds_t frame_len_ns_;
+    packet::stream_timestamp_diff_t frame_len_samples_;
+
+    core::nanoseconds_t target_latency_ns_;
+    packet::stream_timestamp_diff_t target_latency_samples_;
+
+    core::nanoseconds_t timeout_ns_;
+    packet::stream_timestamp_diff_t timeout_samples_;
 
     const audio::sample_t* record_frag_data_;
     size_t record_frag_size_;
     bool record_frag_flag_;
-
-    core::nanoseconds_t target_latency_;
-    core::nanoseconds_t timeout_;
 
     bool open_done_;
     bool opened_;
@@ -127,10 +152,10 @@ private:
     pa_stream* stream_;
     pa_time_event* timer_;
 
-    core::nanoseconds_t timer_deadline_;
+    core::nanoseconds_t timer_deadline_ns_;
 
-    pa_sample_spec sample_spec_;
-    pa_buffer_attr buffer_attrs_;
+    pa_sample_spec stream_spec_;
+    pa_buffer_attr buff_attrs_;
 
     core::RateLimiter rate_limiter_;
 };

@@ -161,8 +161,6 @@ void log_handler(unsigned sox_level,
 
 SoxBackend::SoxBackend()
     : first_created_(false) {
-    roc_log(LogDebug, "sox backend: initializing");
-
     sox_init();
 
     sox_get_globals()->verbosity = 100;
@@ -256,7 +254,8 @@ IDevice* SoxBackend::open_device(DeviceType device_type,
 
     switch (device_type) {
     case DeviceType_Sink: {
-        core::ScopedPtr<SoxSink> sink(new (arena) SoxSink(arena, config), arena);
+        core::ScopedPtr<SoxSink> sink(new (arena) SoxSink(arena, config, driver_type),
+                                      arena);
         if (!sink || !sink->is_valid()) {
             roc_log(LogDebug, "sox backend: can't construct sink: driver=%s path=%s",
                     driver, path);
@@ -273,7 +272,8 @@ IDevice* SoxBackend::open_device(DeviceType device_type,
     } break;
 
     case DeviceType_Source: {
-        core::ScopedPtr<SoxSource> source(new (arena) SoxSource(arena, config), arena);
+        core::ScopedPtr<SoxSource> source(
+            new (arena) SoxSource(arena, config, driver_type), arena);
         if (!source || !source->is_valid()) {
             roc_log(LogDebug, "sox backend: can't construct source: driver=%s path=%s",
                     driver, path);
@@ -294,6 +294,10 @@ IDevice* SoxBackend::open_device(DeviceType device_type,
     }
 
     roc_panic("sox backend: invalid device type");
+}
+
+const char* SoxBackend::name() const {
+    return "sox";
 }
 
 } // namespace sndio

@@ -12,41 +12,67 @@
 #ifndef ROC_PIPELINE_METRICS_H_
 #define ROC_PIPELINE_METRICS_H_
 
-#include "roc_audio/latency_monitor.h"
+#include "roc_audio/latency_tuner.h"
 #include "roc_core/stddefs.h"
+#include "roc_packet/ilink_meter.h"
+#include "roc_packet/units.h"
 
 namespace roc {
 namespace pipeline {
 
-//! Metrics of sender session (connection to receiver).
-struct SenderSessionMetrics {
-    SenderSessionMetrics() {
+//! Sender-side metrics specific to one participant (remote receiver).
+struct SenderParticipantMetrics {
+    //! Link metrics.
+    packet::LinkMetrics link;
+
+    //! Latency metrics.
+    audio::LatencyMetrics latency;
+
+    SenderParticipantMetrics() {
     }
 };
 
-//! Metrics of sender slot.
+//! Sender-side metrics of the whole slot.
 struct SenderSlotMetrics {
-    //! Is slot configuration complete.
+    //! Slot source ID.
+    packet::stream_source_t source_id;
+
+    //! Number of participants (remote receivers) connected to slot.
+    size_t num_participants;
+
+    //! Is slot configuration complete (all endpoints bound).
     bool is_complete;
 
     SenderSlotMetrics()
-        : is_complete(false) {
+        : source_id(0)
+        , num_participants(0)
+        , is_complete(false) {
     }
 };
 
-//! Metrics of receiver session (connection from sender).
-struct ReceiverSessionMetrics {
+//! Receiver-side metrics specific to one participant (remote sender).
+struct ReceiverParticipantMetrics {
+    //! Link metrics.
+    packet::LinkMetrics link;
+
     //! Latency metrics.
-    audio::LatencyMonitorMetrics latency;
+    audio::LatencyMetrics latency;
+
+    ReceiverParticipantMetrics() {
+    }
 };
 
-//! Metrics of receiver slot.
+//! Receiver-side metrics of the whole slot.
 struct ReceiverSlotMetrics {
-    //! Number of sessions connected to receiver.
-    size_t num_sessions;
+    //! Slot source ID.
+    packet::stream_source_t source_id;
+
+    //! Number of participants (remote senders) connected to slot.
+    size_t num_participants;
 
     ReceiverSlotMetrics()
-        : num_sessions(0) {
+        : source_id(0)
+        , num_participants(0) {
     }
 };
 

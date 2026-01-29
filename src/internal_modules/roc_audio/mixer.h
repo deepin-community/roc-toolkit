@@ -12,10 +12,10 @@
 #ifndef ROC_AUDIO_MIXER_H_
 #define ROC_AUDIO_MIXER_H_
 
+#include "roc_audio/frame_factory.h"
 #include "roc_audio/iframe_reader.h"
 #include "roc_audio/sample.h"
 #include "roc_audio/sample_spec.h"
-#include "roc_core/buffer_factory.h"
 #include "roc_core/list.h"
 #include "roc_core/noncopyable.h"
 #include "roc_core/slice.h"
@@ -48,7 +48,9 @@ public:
     //! Initialize.
     //! @p buffer_factory is used to allocate a temporary buffer for mixing.
     //! @p enable_timestamps defines whether to enable calculation of capture timestamps.
-    Mixer(core::BufferFactory<sample_t>& buffer_factory, bool enable_timestamps);
+    Mixer(FrameFactory& frame_factory,
+          const SampleSpec& sample_spec,
+          bool enable_timestamps);
 
     //! Check if the mixer was succefully constructed.
     bool is_valid() const;
@@ -74,6 +76,7 @@ private:
     core::List<IFrameReader, core::NoOwnership> readers_;
     core::Slice<sample_t> temp_buf_;
 
+    const SampleSpec sample_spec_;
     const bool enable_timestamps_;
 
     bool valid_;

@@ -36,6 +36,9 @@ def _add_test(env, kind, name, exe, cmd, timeout):
     if timeout is not None:
         cmd = _run_with_timeout(env, cmd, timeout)
 
+    if kind == 'test':
+        cmd += ' -b'
+
     comstr = env.PrettyCommand(kind.upper(), name, 'green' if kind == 'test' else 'cyan')
     target = env.Alias(testname, [], env.Action(cmd, comstr))
 

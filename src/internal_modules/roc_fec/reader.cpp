@@ -268,7 +268,7 @@ packet::PacketPtr Reader::parse_repaired_packet_(const core::Slice<uint8_t>& buf
         return NULL;
     }
 
-    pp->set_data(buffer);
+    pp->set_buffer(buffer);
     pp->add_flags(packet::Packet::FlagRestored);
 
     return pp;
@@ -733,7 +733,7 @@ bool Reader::update_repair_block_size_(size_t new_blen) {
         return true;
     }
 
-    // shoud not happen: sblen should be validated and updated already
+    // should not happen: sblen should be validated and updated already
     roc_panic_if_not(new_blen > cur_sblen);
 
     const size_t new_rblen = new_blen - cur_sblen;

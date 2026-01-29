@@ -89,9 +89,11 @@ roc_sender_encoder
 
 .. doxygenfunction:: roc_sender_encoder_query
 
-.. doxygenfunction:: roc_sender_encoder_push
+.. doxygenfunction:: roc_sender_encoder_push_frame
 
-.. doxygenfunction:: roc_sender_encoder_pop
+.. doxygenfunction:: roc_sender_encoder_push_feedback_packet
+
+.. doxygenfunction:: roc_sender_encoder_pop_packet
 
 .. doxygenfunction:: roc_sender_encoder_close
 
@@ -110,9 +112,11 @@ roc_receiver_decoder
 
 .. doxygenfunction:: roc_receiver_decoder_query
 
-.. doxygenfunction:: roc_receiver_decoder_push
+.. doxygenfunction:: roc_receiver_decoder_push_packet
 
-.. doxygenfunction:: roc_receiver_decoder_pop
+.. doxygenfunction:: roc_receiver_decoder_pop_feedback_packet
+
+.. doxygenfunction:: roc_receiver_decoder_pop_frame
 
 .. doxygenfunction:: roc_receiver_decoder_close
 
@@ -197,9 +201,9 @@ roc_config
 
 .. doxygenenum:: roc_clock_source
 
-.. doxygenenum:: roc_clock_sync_backend
+.. doxygenenum:: roc_latency_tuner_backend
 
-.. doxygenenum:: roc_clock_sync_profile
+.. doxygenenum:: roc_latency_tuner_profile
 
 .. doxygenenum:: roc_resampler_backend
 
@@ -221,13 +225,13 @@ roc_metrics
 
    #include <roc/metrics.h>
 
+.. doxygenstruct:: roc_connection_metrics
+   :members:
+
 .. doxygenstruct:: roc_sender_metrics
    :members:
 
 .. doxygenstruct:: roc_receiver_metrics
-   :members:
-
-.. doxygenstruct:: roc_session_metrics
    :members:
 
 roc_log
@@ -268,4 +272,4 @@ roc_version
 .. doxygenstruct:: roc_version
    :members:
 
-.. doxygenfunction:: roc_version_get
+.. doxygenfunction:: roc_version_load

@@ -31,25 +31,32 @@ typedef enum roc_log_level {
 
     /** Error messages.
      * Setting this level enables logging only when something goes wrong, e.g. a user
-     * operation can't be completed, or there is not enough memory for a new session.
+     * operation can't be completed, or there is not enough memory.
      */
     ROC_LOG_ERROR = 1,
 
     /** Informational messages.
      * Setting this level enables logging of important high-level events, like binding
-     * a new port or creating a new session.
+     * a new port or accepting a new connection.
      */
     ROC_LOG_INFO = 2,
 
-    /** Debug messages.
-     * Setting this level enables logging of debug messages. Doesn't affect performance.
+    /** Noteworthy debug messages.
+     * Setting this level enables logging of debug messages, but only those which
+     * are generated for more rare and important events, like changing latency.
      */
-    ROC_LOG_DEBUG = 3,
+    ROC_LOG_NOTE = 3,
 
-    /** Debug messages (extra verbosity).
-     * Setting this level enables verbose tracing. May cause significant slow down.
+    /** Debug messages.
+     * Setting this level enables logging of debug messages.
      */
-    ROC_LOG_TRACE = 4
+    ROC_LOG_DEBUG = 4,
+
+    /** Extra verbose debug messages;
+     * Setting this level enables verbose tracing.
+     * Unlike all other levels, may cause significant slow down.
+     */
+    ROC_LOG_TRACE = 5
 } roc_log_level;
 
 /** Log message.

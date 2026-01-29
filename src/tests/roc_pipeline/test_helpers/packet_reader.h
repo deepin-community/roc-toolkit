@@ -19,7 +19,7 @@
 #include "roc_packet/iparser.h"
 #include "roc_packet/ireader.h"
 #include "roc_packet/packet_factory.h"
-#include "roc_rtp/format_map.h"
+#include "roc_rtp/encoding_map.h"
 #include "roc_rtp/parser.h"
 #include "roc_status/status_code.h"
 
@@ -32,7 +32,7 @@ class PacketReader : public core::NonCopyable<> {
 public:
     PacketReader(core::IArena& arena,
                  packet::IReader& reader,
-                 rtp::FormatMap& format_map,
+                 rtp::EncodingMap& encoding_map,
                  packet::PacketFactory& packet_factory,
                  const address::SocketAddr& dst_addr,
                  rtp::PayloadType pt)
@@ -46,7 +46,7 @@ public:
         , offset_(0)
         , abs_offset_(0)
         , first_(true) {
-        construct_(arena, format_map, pt);
+        construct_(arena, encoding_map, pt);
     }
 
     void read_packet(size_t samples_per_packet,
@@ -55,7 +55,7 @@ public:
         packet::PacketPtr pp = read_packet_();
 
         audio::sample_t samples[MaxSamples] = {};
-        parse_packet_(pp->data(), samples_per_packet, samples);
+        parse_packet_(pp->buffer(), samples_per_packet, samples);
         check_capture_timestamp_(*pp, sample_spec, base_capture_ts);
 
         for (size_t ns = 0; ns < samples_per_packet; ns++) {
@@ -75,7 +75,7 @@ public:
         packet::PacketPtr pp = read_packet_();
 
         audio::sample_t samples[MaxSamples] = {};
-        parse_packet_(pp->data(), samples_per_packet, samples);
+        parse_packet_(pp->buffer(), samples_per_packet, samples);
         check_capture_timestamp_(*pp, sample_spec, base_capture_ts);
 
         size_t non_zero = 0;
@@ -94,7 +94,7 @@ public:
         packet::PacketPtr pp = read_packet_();
 
         audio::sample_t samples[MaxSamples] = {};
-        parse_packet_(pp->data(), samples_per_packet, samples);
+        parse_packet_(pp->buffer(), samples_per_packet, samples);
         check_capture_timestamp_(*pp, sample_spec, base_capture_ts);
 
         for (size_t ns = 0; ns < samples_per_packet; ns++) {
@@ -113,21 +113,20 @@ private:
     enum { MaxSamples = 4096 };
 
     void
-    construct_(core::IArena& arena, rtp::FormatMap& format_map, rtp::PayloadType pt) {
+    construct_(core::IArena& arena, rtp::EncodingMap& encoding_map, rtp::PayloadType pt) {
         // payload decoder
-        const rtp::Format* fmt = format_map.find_by_pt(pt);
-        CHECK(fmt);
-        payload_decoder_.reset(fmt->new_decoder(arena, fmt->pcm_format, fmt->sample_spec),
-                               arena);
+        const rtp::Encoding* enc = encoding_map.find_by_pt(pt);
+        CHECK(enc);
+        payload_decoder_.reset(enc->new_decoder(arena, enc->sample_spec), arena);
         CHECK(payload_decoder_);
 
         // rtp parser
-        parser_.reset(new (arena) rtp::Parser(format_map, NULL), arena);
+        parser_.reset(new (arena) rtp::Parser(encoding_map, NULL), arena);
     }
 
     packet::PacketPtr read_packet_() {
         packet::PacketPtr pp;
-        UNSIGNED_LONGS_EQUAL(status::StatusOK, reader_.read(pp));
+        LONGS_EQUAL(status::StatusOK, reader_.read(pp));
         CHECK(pp);
 
         CHECK(pp->flags() & packet::Packet::FlagUDP);
@@ -148,12 +147,12 @@ private:
         CHECK(pp->flags() & packet::Packet::FlagRTP);
 
         if (first_) {
-            source_ = pp->rtp()->source;
+            source_ = pp->rtp()->source_id;
             seqnum_ = pp->rtp()->seqnum;
             timestamp_ = pp->rtp()->stream_timestamp;
             first_ = false;
         } else {
-            UNSIGNED_LONGS_EQUAL(source_, pp->rtp()->source);
+            UNSIGNED_LONGS_EQUAL(source_, pp->rtp()->source_id);
             UNSIGNED_LONGS_EQUAL(seqnum_, pp->rtp()->seqnum);
             UNSIGNED_LONGS_EQUAL(timestamp_, pp->rtp()->stream_timestamp);
         }
@@ -184,7 +183,7 @@ private:
                 base_ts + sample_spec.samples_per_chan_2_ns(abs_offset_);
 
             expect_capture_timestamp(capture_ts, pkt.rtp()->capture_timestamp,
-                                     TimestampEpsilon);
+                                     sample_spec, TimestampEpsilonSmpls);
         }
     }
 

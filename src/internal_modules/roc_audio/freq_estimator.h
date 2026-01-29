@@ -66,8 +66,8 @@ public:
     //! @b Parameters
     //!  - @p profile defines configuration preset.
     //!  - @p target_latency defines latency we want to archive.
-    explicit FreqEstimator(FreqEstimatorProfile profile,
-                           packet::stream_timestamp_t target_latency);
+    FreqEstimator(FreqEstimatorProfile profile,
+                  packet::stream_timestamp_t target_latency);
 
     //! Get current frequecy coefficient.
     float freq_coeff() const;
@@ -93,9 +93,6 @@ private:
 
     double coeff_; // Current frequency coefficient value.
 };
-
-//! Get string name of FreqEstimator profile.
-const char* fe_profile_to_str(FreqEstimatorProfile profile);
 
 } // namespace audio
 } // namespace roc

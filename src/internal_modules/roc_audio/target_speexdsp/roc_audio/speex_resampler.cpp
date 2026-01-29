@@ -46,10 +46,10 @@ inline int get_quality(ResamplerProfile profile) {
 } // namespace
 
 SpeexResampler::SpeexResampler(core::IArena& arena,
-                               core::BufferFactory<sample_t>& buffer_factory,
+                               FrameFactory& frame_factory,
                                ResamplerProfile profile,
-                               const audio::SampleSpec& in_spec,
-                               const audio::SampleSpec& out_spec)
+                               const SampleSpec& in_spec,
+                               const SampleSpec& out_spec)
     : IResampler(arena)
     , speex_state_(NULL)
     , num_ch_((spx_uint32_t)in_spec.num_channels())
@@ -60,7 +60,8 @@ SpeexResampler::SpeexResampler(core::IArena& arena,
     , in_latency_diff_(0)
     , rate_limiter_(LogReportInterval)
     , valid_(false) {
-    if (!in_spec.is_valid() || !out_spec.is_valid()) {
+    if (!in_spec.is_valid() || !out_spec.is_valid() || !in_spec.is_raw()
+        || !out_spec.is_raw()) {
         roc_log(LogError,
                 "speex resampler: invalid sample spec:"
                 " in_spec=%s out_spec=%s",
@@ -94,14 +95,15 @@ SpeexResampler::SpeexResampler(core::IArena& arena,
     initial_in_latency_ = (size_t)speex_resampler_get_input_latency(speex_state_);
 
     in_frame_size_ = in_frame_pos_ = std::min(
-        initial_in_latency_ * in_spec.num_channels(), buffer_factory.buffer_size());
+        initial_in_latency_ * in_spec.num_channels(), frame_factory.raw_buffer_size());
 
     roc_log(LogDebug,
             "speex resampler: initializing:"
-            " quality=%d frame_size=%lu channels_num=%lu",
-            quality, (unsigned long)in_frame_size_, (unsigned long)num_ch_);
+            " profile=%s quality=%d frame_size=%lu channels_num=%lu",
+            resampler_profile_to_str(profile), quality, (unsigned long)in_frame_size_,
+            (unsigned long)num_ch_);
 
-    if (!(in_frame_ = buffer_factory.new_buffer())) {
+    if (!(in_frame_ = frame_factory.new_raw_buffer())) {
         roc_log(LogError, "speex resampler: can't allocate frame buffer");
         return;
     }
@@ -147,7 +149,7 @@ bool SpeexResampler::set_scaling(size_t input_rate, size_t output_rate, float mu
     //
     // Unfortunately, speex does not allow numerator and denumerator to be larger
     // than certain value. If it happens, either speex_resampler_set_rate_frac()
-    // returns error, or it succeedes, but overflows happen during resampling.
+    // returns error, or it succeeds, but overflows happen during resampling.
     //
     // To work around this, we use floating-point `base` and compute maximum "safe"
     // value which will not cause overflows in speex.
@@ -239,7 +241,7 @@ size_t SpeexResampler::pop_output(sample_t* out_buf, size_t out_bufsz) {
         // required latency.
         //
         // Here we adjust speex behavior to be in-line with other backends. It allows
-        // us to perform latency and timestamp calculations uniformely for all backends.
+        // us to perform latency and timestamp calculations uniformly for all backends.
         if (initial_out_countdown_) {
             const size_t n_samples =
                 std::min((size_t)remaining_out, initial_out_countdown_);

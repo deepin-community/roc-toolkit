@@ -64,11 +64,27 @@ BackendDispatcher::BackendDispatcher(core::IArena& arena)
 }
 
 ISink* BackendDispatcher::open_default_sink(const Config& config) {
-    return (ISink*)open_default_device_(DeviceType_Sink, config);
+    IDevice* device = open_default_device_(DeviceType_Sink, config);
+    if (!device) {
+        return NULL;
+    }
+
+    roc_panic_if_msg(device->type() != DeviceType_Sink || !device->to_sink(),
+                     "backend dispatcher: unexpected non-sink device");
+
+    return device->to_sink();
 }
 
 ISource* BackendDispatcher::open_default_source(const Config& config) {
-    return (ISource*)open_default_device_(DeviceType_Sink, config);
+    IDevice* device = open_default_device_(DeviceType_Source, config);
+    if (!device) {
+        return NULL;
+    }
+
+    roc_panic_if_msg(device->type() != DeviceType_Source || !device->to_source(),
+                     "backend dispatcher: unexpected non-source device");
+
+    return device->to_source();
 }
 
 ISink* BackendDispatcher::open_sink(const address::IoUri& uri,
@@ -81,8 +97,16 @@ ISink* BackendDispatcher::open_sink(const address::IoUri& uri,
     const DriverType driver_type = select_driver_type(uri);
     const char* driver_name = select_driver_name(uri, force_format);
 
-    return (ISink*)open_device_(DeviceType_Sink, driver_type, driver_name, uri.path(),
-                                config);
+    IDevice* device =
+        open_device_(DeviceType_Sink, driver_type, driver_name, uri.path(), config);
+    if (!device) {
+        return NULL;
+    }
+
+    roc_panic_if_msg(device->type() != DeviceType_Sink || !device->to_sink(),
+                     "backend dispatcher: unexpected non-sink device");
+
+    return device->to_sink();
 }
 
 ISource* BackendDispatcher::open_source(const address::IoUri& uri,
@@ -95,8 +119,16 @@ ISource* BackendDispatcher::open_source(const address::IoUri& uri,
     const DriverType driver_type = select_driver_type(uri);
     const char* driver_name = select_driver_name(uri, force_format);
 
-    return (ISource*)open_device_(DeviceType_Source, driver_type, driver_name, uri.path(),
-                                  config);
+    IDevice* device =
+        open_device_(DeviceType_Source, driver_type, driver_name, uri.path(), config);
+    if (!device) {
+        return NULL;
+    }
+
+    roc_panic_if_msg(device->type() != DeviceType_Source || !device->to_source(),
+                     "backend dispatcher: unexpected non-source device");
+
+    return device->to_source();
 }
 
 bool BackendDispatcher::get_supported_schemes(core::StringList& result) {

@@ -6,22 +6,23 @@ Uploaders: Dylan Aïssi <daissi@debian.org>
 Build-Depends: debhelper-compat (= 13),
                gengetopt,
                libcpputest-dev,
+               libopenfec-dev [!sparc64],
                libpulse-dev,
+               libsndfile1-dev,
                libsox-dev,
                libspeexdsp-dev,
                libssl-dev,
-               libunwind-dev [!alpha !hurd-any !m68k !sparc64 !x32],
                libuv1-dev,
                pkgconf,
                ragel,
                scons
-Standards-Version: 4.6.2
+Standards-Version: 4.7.0
 Rules-Requires-Root: no
 Vcs-Browser: https://salsa.debian.org/multimedia-team/roc-toolkit
 Vcs-Git: https://salsa.debian.org/multimedia-team/roc-toolkit.git
 Homepage: https://roc-streaming.org/
 
-Package: libroc0.3
+Package: libroc0.4
 Section: libs
 Architecture: any
 Multi-Arch: same
@@ -41,10 +42,10 @@ Section: libdevel
 Architecture: any
 Multi-Arch: same
 Depends: ${misc:Depends},
-         libroc0.3 (= ${binary:Version}),
+         libroc0.4 (= ${binary:Version}),
+         libopenfec-dev [!sparc64],
          libspeexdsp-dev,
          libssl-dev,
-         libunwind-dev [!alpha !hurd-any !m68k !sparc64 !x32],
          libuv1-dev
 Description: real-time audio streaming over the network (development files)
  Roc is a network transport, highly specialized for the real-time streaming use
@@ -67,3 +68,18 @@ Description: real-time audio streaming over the network (tools)
  these are performed transparently under the hood.
  .
  This package provides the roc-toolkit tools.
+
+Package: roc-toolkit-tests
+Architecture: any
+Depends: ${misc:Depends},
+         ${shlibs:Depends}
+Multi-Arch: foreign
+Description: real-time audio streaming over the network (tests)
+ Roc is a network transport, highly specialized for the real-time streaming use
+ case. The user writes the stream to the one end and reads it from another end,
+ and Roc deals with all the complexity of the task of delivering data in time
+ and with no loss. Encoding, decoding, adjusting rates, restoring losses - all
+ these are performed transparently under the hood.
+ .
+ This package contains test programs from the upstream code which are used
+ for the autopkgtests.

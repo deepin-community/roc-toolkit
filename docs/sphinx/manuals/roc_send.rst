@@ -24,14 +24,18 @@ Options
 -r, --repair=ENDPOINT_URI   Remote repair endpoint
 -c, --control=ENDPOINT_URI  Remote control endpoint
 --reuseaddr                 enable SO_REUSEADDR when binding sockets
+--target-latency=STRING     Target latency, TIME units
 --io-latency=STRING         Recording target latency, TIME units
+--latency-tolerance=STRING  Maximum deviation from target latency, TIME units
 --nbsrc=INT                 Number of source packets in FEC block
 --nbrpr=INT                 Number of repair packets in FEC block
---packet-length=STRING      Outgoing packet length, TIME units
---packet-limit=INT          Maximum packet size, in bytes
---frame-limit=INT           Maximum internal frame size, in bytes
---frame-length=TIME         Duration of the internal frames, TIME units
+--packet-len=STRING         Outgoing packet length, TIME units
+--frame-len=TIME            Duration of the internal frames, TIME units
+--max-packet-size=SIZE      Maximum packet size, in SIZE units
+--max-frame-size=SIZE       Maximum internal frame size, in SIZE units
 --rate=INT                  Override input sample rate, Hz
+--latency-backend=ENUM      Which latency to use in latency tuner (possible values="niq" default=`niq')
+--latency-profile=ENUM      Latency tuning profile  (possible values="responsive", "gradual", "intact" default=`intact')
 --resampler-backend=ENUM    Resampler backend  (possible values="default", "builtin", "speex", "speexdec" default=`default')
 --resampler-profile=ENUM    Resampler profile  (possible values="low", "medium", "high" default=`medium')
 --interleaving              Enable packet interleaving  (default=off)
@@ -134,7 +138,13 @@ Time units
 ----------
 
 *TIME* should have one of the following forms:
-  123ns, 123us, 123ms, 123s, 123m, 123h
+  123ns; 1.23us; 1.23ms; 1.23s; 1.23m; 1.23h;
+
+Size units
+----------
+
+*SIZE* should have one of the following forms:
+  123; 1.23K; 1.23M; 1.23G;
 
 EXAMPLES
 ========
@@ -235,19 +245,19 @@ Select the LDPC-Staircase FEC scheme and a larger block size:
         -r ldpc://192.168.0.3:10002 -c ldpc://192.168.0.3:10003 \
         --nbsrc=1000 --nbrpr=500
 
-Select lower packet length:
+Select smaller packet length:
 
 .. code::
 
     $ roc-send -vv -i file:./input.wav -s rtp+ldpc://192.168.0.3:10001 \
-        --packet-length 2500us
+        --packet-len 2500us
 
 Select lower I/O latency and frame length:
 
 .. code::
 
     $ roc-send -vv -s rtp://192.168.0.3:10001 \
-        --io-latency=20ms --frame-length 4ms
+        --io-latency=20ms --frame-len 4ms
 
 Manually specify resampling parameters:
 
@@ -255,6 +265,29 @@ Manually specify resampling parameters:
 
     $ roc-send -vv -s rtp://192.168.0.3:10001 \
         --resampler-backend=speex --resampler-profile=high
+
+Perform latency tuning on sender instead of receiver:
+
+.. code::
+
+    $ roc-recv -vv -o pulse://default -s rtp+rs8m://0.0.0.0:10001 \
+        -r rs8m://0.0.0.0:10002 -c rtcp://0.0.0.0:10003 \
+        --latency-profile=intact --target-latency=200ms
+
+    $ roc-send -vv -i file:./input.wav -s rtp+rs8m://192.168.0.3:10001 \
+        -r rs8m://192.168.0.3:10002 -c rtcp://192.168.0.3:10003 \
+        --latency-profile=gradual --target-latency=200ms
+
+ENVIRONMENT VARIABLES
+=====================
+
+The following environment variables are supported:
+
+NO_COLOR
+    By default, terminal coloring is automatically detected. This environment variable can be set to a non-empty string to disable terminal coloring. It has lower precedence than ``--color`` option.
+
+FORCE_COLOR
+    By default, terminal coloring is automatically detected. This environment variable can be set to a positive integer to enable/force terminal coloring. It has lower precedence than  ``NO_COLOR`` variable and ``--color`` option.
 
 SEE ALSO
 ========
@@ -269,4 +302,4 @@ Please report any bugs found via GitHub (https://github.com/roc-streaming/roc-to
 AUTHORS
 =======
 
-See `authors <https://roc-streaming.org/toolkit/docs/about_project/authors.html>`_ page on the website for a list of maintainers and contributors.
+See authors page on the website for a list of maintainers and contributors (https://roc-streaming.org/toolkit/docs/about_project/authors.html).

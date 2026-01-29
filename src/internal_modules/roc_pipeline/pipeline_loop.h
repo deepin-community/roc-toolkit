@@ -23,13 +23,56 @@
 #include "roc_core/seqlock.h"
 #include "roc_core/time.h"
 #include "roc_packet/units.h"
-#include "roc_pipeline/config.h"
 #include "roc_pipeline/ipipeline_task_completer.h"
 #include "roc_pipeline/ipipeline_task_scheduler.h"
 #include "roc_pipeline/pipeline_task.h"
 
 namespace roc {
 namespace pipeline {
+
+//! Pipeline loop task processing parameters.
+struct PipelineLoopConfig {
+    //! Enable precise task scheduling mode (default).
+    //! The other settings have effect only when this is set to true.
+    //! When enabled, pipeline processes tasks in dedicated time intervals between
+    //! sub-frame and between frames, trying to prevent time collisions between
+    //! task and frame processing.
+    bool enable_precise_task_scheduling;
+
+    //! Minimum frame duration between processing tasks.
+    //! In-frame task processing does not happen until at least given number
+    //! of samples is processed.
+    //! Set to zero to allow task processing between frames of any size.
+    core::nanoseconds_t min_frame_length_between_tasks;
+
+    //! Maximum frame duration between processing tasks.
+    //! If the frame is larger than this size, it is split into multiple subframes
+    //! to allow task processing between the sub-frames.
+    //! Set to zero to disable frame splitting.
+    core::nanoseconds_t max_frame_length_between_tasks;
+
+    //! Maximum task processing duration happening immediately after processing a frame.
+    //! If this period expires and there are still pending tasks, asynchronous
+    //! task processing is scheduled.
+    //! At least one task is always processed after each frame, even if this
+    //! setting is too small.
+    core::nanoseconds_t max_inframe_task_processing;
+
+    //! Time interval during which no task processing is allowed.
+    //! This setting is used to prohibit task processing during the time when
+    //! next read() or write() call is expected.
+    //! Since it can not be calculated absolutely precisely, and there is always
+    //! thread switch overhead, scheduler jitter clock drift, we use a wide interval.
+    core::nanoseconds_t task_processing_prohibited_interval;
+
+    PipelineLoopConfig()
+        : enable_precise_task_scheduling(true)
+        , min_frame_length_between_tasks(200 * core::Microsecond)
+        , max_frame_length_between_tasks(1 * core::Millisecond)
+        , max_inframe_task_processing(20 * core::Microsecond)
+        , task_processing_prohibited_interval(200 * core::Microsecond) {
+    }
+};
 
 //! Base class for task-based pipelines.
 //!
@@ -95,7 +138,7 @@ namespace pipeline {
 //! invocation by its own. Instead, it relies on the user-provided IPipelineTaskScheduler
 //! object.
 //!
-//! When the pipeline wants to schedule asychronous process_tasks() invocation, it
+//! When the pipeline wants to schedule asynchronous process_tasks() invocation, it
 //! calls IPipelineTaskScheduler::schedule_task_processing(). It's up to the user when and
 //! on which thread to invoke process_tasks(), but pipeline gives a hint with the ideal
 //! invocation time.
@@ -127,7 +170,7 @@ namespace pipeline {
 //! When process_tasks() is processing asynchronous tasks, but detects that
 //! process_frame_and_tasks() was invoked concurrently from another thread, it gives
 //! it a way and exits. process_frame_and_tasks() will process the frame and some of
-//! the remaning tasks, and if there are even more tasks remaining, it will invoke
+//! the remaining tasks, and if there are even more tasks remaining, it will invoke
 //! schedule_task_processing() to allow process_tasks() to continue.
 //!
 //! When schedule() and process_tasks() want to invoke schedule_task_processing(), but
@@ -143,7 +186,7 @@ namespace pipeline {
 //! process a frame or a task.
 //!
 //! scheduler_mutex_ protects IPipelineTaskScheduler invocations. It should be acquired to
-//! schedule or cancel asycnrhonous task processing.
+//! schedule or cancel asynchronous task processing.
 //!
 //! If pipeline_mutex_ is locked, it's guaranteed that the thread locking it will
 //! check pending tasks after unlocking the mutex and will either process them or
@@ -167,7 +210,7 @@ namespace pipeline {
 //! seqlocks for 64-bit counters (which are reduced to atomics on 64-bit CPUs), always
 //! using try_lock() for mutexes and delaying the work if the mutex can't be acquired,
 //! and using semaphores instead of condition variables for signaling (which don't
-//! require blocking on mutex, at least on modern plarforms; e.g. on glibc they're
+//! require blocking on mutex, at least on modern platforms; e.g. on glibc they're
 //! implemented using an atomic and a futex).
 //!
 //! process_frame_and_tasks() is not lock-free because it has to acquire the pipeline
@@ -177,7 +220,7 @@ namespace pipeline {
 //!
 //! This approach helps us with our global goal of making all inter-thread interactions
 //! mostly wait-free, so that one thread is never or almost never blocked when another
-//! thead is blocked, preempted, or busy.
+//! thread is blocked, preempted, or busy.
 //!
 //! Benchmarks
 //! ----------
@@ -235,7 +278,7 @@ protected:
 
     //! Initialization.
     PipelineLoop(IPipelineTaskScheduler& scheduler,
-                 const TaskConfig& config,
+                 const PipelineLoopConfig& config,
                  const audio::SampleSpec& sample_spec);
 
     virtual ~PipelineLoop();
@@ -278,25 +321,28 @@ private:
     void cancel_async_task_processing_();
 
     void process_task_(PipelineTask& task, bool notify);
-    bool process_next_subframe_(audio::Frame& frame, size_t* frame_pos);
+    bool process_next_subframe_(audio::Frame& frame,
+                                packet::stream_timestamp_t* frame_pos,
+                                packet::stream_timestamp_t frame_duration);
 
     bool start_subframe_task_processing_();
     bool subframe_task_processing_allowed_(core::nanoseconds_t next_frame_deadline) const;
 
-    core::nanoseconds_t update_next_frame_deadline_(core::nanoseconds_t frame_start_time,
-                                                    size_t frame_size);
+    core::nanoseconds_t
+    update_next_frame_deadline_(core::nanoseconds_t frame_start_time,
+                                packet::stream_timestamp_t frame_duration);
     bool
     interframe_task_processing_allowed_(core::nanoseconds_t next_frame_deadline) const;
 
     void report_stats_();
 
     // configuration
-    const TaskConfig config_;
+    const PipelineLoopConfig config_;
 
     const audio::SampleSpec sample_spec_;
 
-    const size_t min_samples_between_tasks_;
-    const size_t max_samples_between_tasks_;
+    const packet::stream_timestamp_t min_samples_between_tasks_;
+    const packet::stream_timestamp_t max_samples_between_tasks_;
 
     const core::nanoseconds_t no_task_proc_half_interval_;
 
@@ -331,7 +377,7 @@ private:
     core::nanoseconds_t subframe_tasks_deadline_;
 
     // number of samples processed since last in-frame task processing
-    size_t samples_processed_;
+    packet::stream_timestamp_t samples_processed_;
 
     // did we accumulate enough samples in samples_processed_
     bool enough_samples_to_process_tasks_;

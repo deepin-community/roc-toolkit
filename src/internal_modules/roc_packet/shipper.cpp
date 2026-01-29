@@ -11,25 +11,35 @@
 namespace roc {
 namespace packet {
 
-Shipper::Shipper(const address::SocketAddr& dest_address,
-                 IComposer& composer,
-                 IWriter& writer)
-    : dest_address_(dest_address)
-    , composer_(composer)
-    , writer_(writer) {
+Shipper::Shipper(IComposer& composer,
+                 IWriter& outbound_writer,
+                 const address::SocketAddr* outbound_address)
+    : composer_(composer)
+    , outbound_writer_(outbound_writer) {
+    if (outbound_address) {
+        outbound_address_ = *outbound_address;
+    }
+}
+
+const address::SocketAddr& Shipper::outbound_address() const {
+    return outbound_address_;
 }
 
 status::StatusCode Shipper::write(const PacketPtr& packet) {
-    if (dest_address_.has_host_port()) {
-        packet->add_flags(Packet::FlagUDP);
-        packet->udp()->dst_addr = dest_address_;
+    if (outbound_address_) {
+        if (!packet->has_flags(Packet::FlagUDP)) {
+            packet->add_flags(Packet::FlagUDP);
+        }
+        if (!packet->udp()->dst_addr) {
+            packet->udp()->dst_addr = outbound_address_;
+        }
     }
 
-    if (!packet->has_flags(packet::Packet::FlagPrepared)) {
+    if (!packet->has_flags(Packet::FlagPrepared)) {
         roc_panic("shipper: unexpected packet: should be prepared");
     }
 
-    if (!packet->has_flags(packet::Packet::FlagComposed)) {
+    if (!packet->has_flags(Packet::FlagComposed)) {
         if (!composer_.compose(*packet)) {
             // TODO(gh-183): return status from composer
             roc_panic("shipper: can't compose packet");
@@ -37,7 +47,7 @@ status::StatusCode Shipper::write(const PacketPtr& packet) {
         packet->add_flags(Packet::FlagComposed);
     }
 
-    return writer_.write(packet);
+    return outbound_writer_.write(packet);
 }
 
 } // namespace packet

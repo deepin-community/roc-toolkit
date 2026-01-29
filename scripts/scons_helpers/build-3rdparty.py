@@ -1046,7 +1046,7 @@ ctx.pkg_rpath_dir = os.path.join(ctx.pkg_dir, 'rpath')
 ctx.log_file = os.path.join(ctx.pkg_dir, 'build.log')
 ctx.commit_file = os.path.join(ctx.pkg_dir, 'commit')
 
-ctx.prefer_cmake = bool(args.android_platform)
+ctx.prefer_cmake = bool(args.macos_platform or args.android_platform)
 
 #
 # Build package.
@@ -1080,6 +1080,7 @@ if ctx.pkg_name == 'libuv':
             shutil.copy('libuv.a', '../libuv.a')
         changedir(ctx, '..')
     else:
+        subst_files(ctx, 'src/unix/core.c', ' dup3', ' uv__dup3')
         execute(ctx, './autogen.sh')
         execute(ctx, './configure --host={host} {vars} {flags} {opts}'.format(
             host=ctx.toolchain,
@@ -1300,7 +1301,7 @@ elif ctx.pkg_name == 'sox':
 elif ctx.pkg_name == 'alsa':
     download(
         ctx,
-        'ftp://ftp.alsa-project.org/pub/lib/alsa-lib-{ctx.pkg_ver}.tar.bz2',
+        'https://www.alsa-project.org/files/pub/lib/alsa-lib-{ctx.pkg_ver}.tar.bz2',
         'alsa-lib-{ctx.pkg_ver}.tar.bz2')
     unpack(ctx,
            'alsa-lib-{ctx.pkg_ver}.tar.bz2',
@@ -1352,7 +1353,8 @@ elif ctx.pkg_name == 'pulseaudio':
         execute(ctx, './configure --host={host} {vars} {flags} {deps} {opts}'.format(
             host=ctx.toolchain,
             vars=format_vars(ctx),
-            flags=format_flags(ctx, cflags='-w -fomit-frame-pointer -O2'),
+            flags=format_flags(ctx, cflags='-w -Wno-implicit-function-declaration' + \
+                ' -fomit-frame-pointer -O2'),
             deps=' '.join([
                 'LIBJSON_CFLAGS=" "',
                 'LIBJSON_LIBS="-ljson-c"',
@@ -1410,7 +1412,7 @@ elif ctx.pkg_name == 'pulseaudio':
 elif ctx.pkg_name == 'ltdl':
     download(
         ctx,
-        'ftp://ftp.gnu.org/gnu/libtool/libtool-{ctx.pkg_ver}.tar.gz',
+        'https://ftp.gnu.org/gnu/libtool/libtool-{ctx.pkg_ver}.tar.gz',
         'libtool-{ctx.pkg_ver}.tar.gz')
     unpack(
         ctx,
@@ -1462,7 +1464,7 @@ elif ctx.pkg_name == 'json-c':
 elif ctx.pkg_name == 'gengetopt':
     download(
         ctx,
-        'ftp://ftp.gnu.org/gnu/gengetopt/gengetopt-{ctx.pkg_ver}.tar.gz',
+        'https://ftp.gnu.org/gnu/gengetopt/gengetopt-{ctx.pkg_ver}.tar.gz',
         'gengetopt-{ctx.pkg_ver}.tar.gz')
     unpack(
         ctx,
@@ -1517,6 +1519,8 @@ elif ctx.pkg_name == 'cpputest':
                 opts=' '.join([
                     # disable memory leak detection which is too hard to use properly
                     '--disable-memory-leak-detection',
+                    # doesn't work on older platforms
+                    '--disable-extensions',
                     '--enable-static',
                 ])))
         execute_make(ctx)

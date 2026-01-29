@@ -6,11 +6,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+#include "roc_core/atomic_ops.h"
 #include "roc_core/console.h"
 
 // ANSI Color Codes.
@@ -34,13 +37,49 @@ namespace core {
 
 namespace {
 
-bool detect_color_support() {
+// Serializes console operations.
+pthread_mutex_t console_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// -1 means unknown, 0 means no support, +1 means have support.
+int console_colors = -1;
+
+bool env_has_no_color() {
+    const char* no_color = getenv("NO_COLOR");
+    if (no_color) {
+        return strnlen(no_color, 16) > 0;
+    }
+    return false;
+}
+
+bool env_has_force_color() {
+    const char* force_color = getenv("FORCE_COLOR");
+    if (force_color) {
+        char* end;
+        long value = strtol(force_color, &end, 10);
+        if (*force_color != '\0' && *end == '\0') {
+            return value > 0;
+        }
+    }
+    return false;
+}
+
+bool term_supports_color() {
     if (isatty(STDERR_FILENO)) {
         const char* term = getenv("TERM");
-        return term && strncmp("dumb", term, 4) != 0;
-    } else {
-        return false;
+        if (term) {
+            return strncmp("dumb", term, 4) != 0;
+        }
     }
+    return false;
+}
+
+bool detect_color_support() {
+    if (env_has_no_color()) {
+        return false;
+    } else if (env_has_force_color()) {
+        return true;
+    }
+    return term_supports_color();
 }
 
 const char* color_code(Color color) {
@@ -69,18 +108,41 @@ const char* color_code(Color color) {
 
 } // namespace
 
-Console::Console()
-    : colors_supported_(detect_color_support()) {
+bool console_supports_colors() {
+    int colors = AtomicOps::load_seq_cst(console_colors);
+
+    if (colors == -1) {
+        pthread_mutex_lock(&console_mutex);
+
+        colors = detect_color_support() ? 1 : 0;
+        AtomicOps::store_seq_cst(console_colors, colors);
+
+        pthread_mutex_unlock(&console_mutex);
+    }
+
+    return colors;
 }
 
-bool Console::colors_supported() {
-    return colors_supported_;
+void console_println(const char* format, ...) {
+    pthread_mutex_lock(&console_mutex);
+
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, format, args);
+    va_end(args);
+
+    fprintf(stderr, "\n");
+    fflush(stderr);
+
+    pthread_mutex_unlock(&console_mutex);
 }
 
-void Console::println(Color color, const char* format, ...) {
-    Mutex::Lock lock(mutex_);
+void console_println(Color color, const char* format, ...) {
+    const bool use_colors = (color != Color_None) && console_supports_colors();
 
-    if (colors_supported_ && color != Color_None) {
+    pthread_mutex_lock(&console_mutex);
+
+    if (use_colors) {
         fprintf(stderr, "%s", color_code(color));
     }
 
@@ -89,12 +151,14 @@ void Console::println(Color color, const char* format, ...) {
     vfprintf(stderr, format, args);
     va_end(args);
 
-    if (colors_supported_ && color != Color_None) {
+    if (use_colors) {
         fprintf(stderr, "%s", COLOR_RESET);
     }
 
     fprintf(stderr, "\n");
     fflush(stderr);
+
+    pthread_mutex_unlock(&console_mutex);
 }
 
 } // namespace core

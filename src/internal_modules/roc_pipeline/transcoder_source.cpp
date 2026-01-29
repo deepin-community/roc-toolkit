@@ -16,77 +16,87 @@ namespace pipeline {
 
 TranscoderSource::TranscoderSource(const TranscoderConfig& config,
                                    sndio::ISource& input_source,
-                                   core::BufferFactory<audio::sample_t>& buffer_factory,
+                                   core::IPool& buffer_pool,
                                    core::IArena& arena)
-    : input_source_(input_source)
-    , audio_reader_(NULL)
-    , config_(config) {
-    audio::IFrameReader* areader = &input_source_;
+    : frame_factory_(buffer_pool)
+    , input_source_(input_source)
+    , frame_reader_(NULL)
+    , config_(config)
+    , valid_(false) {
+    config_.deduce_defaults();
 
-    if (config.input_sample_spec.channel_set()
-        != config.output_sample_spec.channel_set()) {
+    audio::IFrameReader* frm_reader = &input_source_;
+
+    if (config_.input_sample_spec.channel_set()
+        != config_.output_sample_spec.channel_set()) {
+        const audio::SampleSpec from_spec(config_.input_sample_spec.sample_rate(),
+                                          audio::Sample_RawFormat,
+                                          config_.input_sample_spec.channel_set());
+
+        const audio::SampleSpec to_spec(config_.input_sample_spec.sample_rate(),
+                                        audio::Sample_RawFormat,
+                                        config_.output_sample_spec.channel_set());
+
         channel_mapper_reader_.reset(
             new (channel_mapper_reader_) audio::ChannelMapperReader(
-                *areader, buffer_factory, config.input_sample_spec,
-                audio::SampleSpec(config.input_sample_spec.sample_rate(),
-                                  config.output_sample_spec.channel_set())));
+                *frm_reader, frame_factory_, from_spec, to_spec));
         if (!channel_mapper_reader_ || !channel_mapper_reader_->is_valid()) {
             return;
         }
-        areader = channel_mapper_reader_.get();
+        frm_reader = channel_mapper_reader_.get();
     }
 
-    if (config.input_sample_spec.sample_rate()
-        != config.output_sample_spec.sample_rate()) {
-        resampler_poisoner_.reset(new (resampler_poisoner_)
-                                      audio::PoisonReader(*areader));
-        if (!resampler_poisoner_) {
-            return;
-        }
-        areader = resampler_poisoner_.get();
+    if (config_.input_sample_spec.sample_rate()
+        != config_.output_sample_spec.sample_rate()) {
+        const audio::SampleSpec from_spec(config_.input_sample_spec.sample_rate(),
+                                          audio::Sample_RawFormat,
+                                          config_.output_sample_spec.channel_set());
+
+        const audio::SampleSpec to_spec(config_.output_sample_spec.sample_rate(),
+                                        audio::Sample_RawFormat,
+                                        config_.output_sample_spec.channel_set());
 
         resampler_.reset(audio::ResamplerMap::instance().new_resampler(
-            config.resampler_backend, arena, buffer_factory, config.resampler_profile,
-            audio::SampleSpec(config.input_sample_spec.sample_rate(),
-                              config.output_sample_spec.channel_set()),
-            config.output_sample_spec));
-
+            arena, frame_factory_, config_.resampler, from_spec, to_spec));
         if (!resampler_) {
             return;
         }
 
         resampler_reader_.reset(new (resampler_reader_) audio::ResamplerReader(
-            *areader, *resampler_,
-            audio::SampleSpec(config.input_sample_spec.sample_rate(),
-                              config.output_sample_spec.channel_set()),
-            config.output_sample_spec));
-
+            *frm_reader, *resampler_, from_spec, to_spec));
         if (!resampler_reader_ || !resampler_reader_->is_valid()) {
             return;
         }
-        areader = resampler_reader_.get();
+        frm_reader = resampler_reader_.get();
     }
 
-    pipeline_poisoner_.reset(new (pipeline_poisoner_) audio::PoisonReader(*areader));
-    if (!pipeline_poisoner_) {
-        return;
-    }
-    areader = pipeline_poisoner_.get();
-
-    if (config.enable_profiling) {
+    if (config_.enable_profiling) {
         profiler_.reset(new (profiler_) audio::ProfilingReader(
-            *areader, arena, config.output_sample_spec, config.profiler_config));
+            *frm_reader, arena, config_.output_sample_spec, config_.profiler));
         if (!profiler_ || !profiler_->is_valid()) {
             return;
         }
-        areader = profiler_.get();
+        frm_reader = profiler_.get();
     }
 
-    audio_reader_ = areader;
+    if (!frm_reader) {
+        return;
+    }
+
+    frame_reader_ = frm_reader;
+    valid_ = true;
 }
 
 bool TranscoderSource::is_valid() {
-    return audio_reader_;
+    return valid_;
+}
+
+sndio::ISink* TranscoderSource::to_sink() {
+    return NULL;
+}
+
+sndio::ISource* TranscoderSource::to_source() {
+    return this;
 }
 
 sndio::DeviceType TranscoderSource::type() const {
@@ -132,7 +142,7 @@ void TranscoderSource::reclock(core::nanoseconds_t timestamp) {
 bool TranscoderSource::read(audio::Frame& frame) {
     roc_panic_if(!is_valid());
 
-    return audio_reader_->read(frame);
+    return frame_reader_->read(frame);
 }
 
 } // namespace pipeline

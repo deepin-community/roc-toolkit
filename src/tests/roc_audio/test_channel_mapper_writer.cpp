@@ -11,7 +11,6 @@
 #include "test_helpers/mock_writer.h"
 
 #include "roc_audio/channel_mapper_writer.h"
-#include "roc_core/buffer_factory.h"
 #include "roc_core/heap_arena.h"
 #include "roc_core/stddefs.h"
 #include "roc_core/time.h"
@@ -26,23 +25,23 @@ const double Epsilon = 0.00001;
 enum { MaxSz = 500 };
 
 core::HeapArena arena;
-core::BufferFactory<sample_t> buffer_factory(arena, MaxSz);
+FrameFactory frame_factory(arena, MaxSz * sizeof(sample_t));
 
 void fill_mono(Frame& frame, sample_t value) {
-    CHECK(frame.num_samples() > 0);
+    CHECK(frame.num_raw_samples() > 0);
 
-    for (size_t n = 0; n < frame.num_samples(); n++) {
-        frame.samples()[n] = value;
+    for (size_t n = 0; n < frame.num_raw_samples(); n++) {
+        frame.raw_samples()[n] = value;
     }
 }
 
 void fill_stereo(Frame& frame, sample_t left_value, sample_t right_value) {
-    CHECK(frame.num_samples() > 0);
-    CHECK(frame.num_samples() % 2 == 0);
+    CHECK(frame.num_raw_samples() > 0);
+    CHECK(frame.num_raw_samples() % 2 == 0);
 
-    for (size_t n = 0; n < frame.num_samples(); n += 2) {
-        frame.samples()[n + 0] = left_value;
-        frame.samples()[n + 1] = right_value;
+    for (size_t n = 0; n < frame.num_raw_samples(); n += 2) {
+        frame.raw_samples()[n + 0] = left_value;
+        frame.raw_samples()[n + 1] = right_value;
     }
 }
 
@@ -76,16 +75,16 @@ TEST_GROUP(channel_mapper_writer) {};
 TEST(channel_mapper_writer, small_frame_upmix) {
     enum { FrameSz = MaxSz / 2 };
 
-    const SampleSpec in_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                             ChanMask_Surround_Mono);
-    const SampleSpec out_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                              ChanMask_Surround_Stereo);
+    const SampleSpec in_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                             ChanOrder_Smpte, ChanMask_Surround_Mono);
+    const SampleSpec out_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                              ChanOrder_Smpte, ChanMask_Surround_Stereo);
 
     test::MockWriter mock_writer;
-    ChannelMapperWriter mapper_writer(mock_writer, buffer_factory, in_spec, out_spec);
+    ChannelMapperWriter mapper_writer(mock_writer, frame_factory, in_spec, out_spec);
 
     sample_t samples[FrameSz] = {};
-    const unsigned flags = Frame::FlagIncomplete;
+    const unsigned flags = Frame::FlagNotComplete;
     const core::nanoseconds_t timestamp = 1000000;
 
     Frame frame(samples, FrameSz);
@@ -109,16 +108,16 @@ TEST(channel_mapper_writer, small_frame_upmix) {
 TEST(channel_mapper_writer, small_frame_downmix) {
     enum { FrameSz = MaxSz / 2 };
 
-    const SampleSpec in_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                             ChanMask_Surround_Stereo);
-    const SampleSpec out_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                              ChanMask_Surround_Mono);
+    const SampleSpec in_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                             ChanOrder_Smpte, ChanMask_Surround_Stereo);
+    const SampleSpec out_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                              ChanOrder_Smpte, ChanMask_Surround_Mono);
 
     test::MockWriter mock_writer;
-    ChannelMapperWriter mapper_writer(mock_writer, buffer_factory, in_spec, out_spec);
+    ChannelMapperWriter mapper_writer(mock_writer, frame_factory, in_spec, out_spec);
 
     sample_t samples[FrameSz] = {};
-    const unsigned flags = Frame::FlagIncomplete;
+    const unsigned flags = Frame::FlagNotComplete;
     const core::nanoseconds_t timestamp = 1000000;
 
     Frame frame(samples, FrameSz);
@@ -142,16 +141,16 @@ TEST(channel_mapper_writer, small_frame_downmix) {
 TEST(channel_mapper_writer, small_frame_nocts) {
     enum { FrameSz = MaxSz / 2 };
 
-    const SampleSpec in_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                             ChanMask_Surround_Stereo);
-    const SampleSpec out_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                              ChanMask_Surround_Mono);
+    const SampleSpec in_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                             ChanOrder_Smpte, ChanMask_Surround_Stereo);
+    const SampleSpec out_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                              ChanOrder_Smpte, ChanMask_Surround_Mono);
 
     test::MockWriter mock_writer;
-    ChannelMapperWriter mapper_writer(mock_writer, buffer_factory, in_spec, out_spec);
+    ChannelMapperWriter mapper_writer(mock_writer, frame_factory, in_spec, out_spec);
 
     sample_t samples[FrameSz] = {};
-    const unsigned flags = Frame::FlagIncomplete;
+    const unsigned flags = Frame::FlagNotComplete;
 
     Frame frame(samples, FrameSz);
     frame.set_flags(flags);
@@ -174,16 +173,16 @@ TEST(channel_mapper_writer, small_frame_nocts) {
 TEST(channel_mapper_writer, large_frame_upmix) {
     enum { FrameSz = MaxSz * 3 };
 
-    const SampleSpec in_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                             ChanMask_Surround_Mono);
-    const SampleSpec out_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                              ChanMask_Surround_Stereo);
+    const SampleSpec in_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                             ChanOrder_Smpte, ChanMask_Surround_Mono);
+    const SampleSpec out_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                              ChanOrder_Smpte, ChanMask_Surround_Stereo);
 
     test::MockWriter mock_writer;
-    ChannelMapperWriter mapper_writer(mock_writer, buffer_factory, in_spec, out_spec);
+    ChannelMapperWriter mapper_writer(mock_writer, frame_factory, in_spec, out_spec);
 
     sample_t samples[FrameSz] = {};
-    const unsigned flags = Frame::FlagIncomplete;
+    const unsigned flags = Frame::FlagNotComplete;
     const core::nanoseconds_t timestamp = 1000000;
 
     Frame frame(samples, FrameSz);
@@ -210,16 +209,16 @@ TEST(channel_mapper_writer, large_frame_upmix) {
 TEST(channel_mapper_writer, large_frame_downmix) {
     enum { FrameSz = MaxSz * 4 };
 
-    const SampleSpec in_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                             ChanMask_Surround_Stereo);
-    const SampleSpec out_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                              ChanMask_Surround_Mono);
+    const SampleSpec in_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                             ChanOrder_Smpte, ChanMask_Surround_Stereo);
+    const SampleSpec out_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                              ChanOrder_Smpte, ChanMask_Surround_Mono);
 
     test::MockWriter mock_writer;
-    ChannelMapperWriter mapper_writer(mock_writer, buffer_factory, in_spec, out_spec);
+    ChannelMapperWriter mapper_writer(mock_writer, frame_factory, in_spec, out_spec);
 
     sample_t samples[FrameSz] = {};
-    const unsigned flags = Frame::FlagIncomplete;
+    const unsigned flags = Frame::FlagNotComplete;
     const core::nanoseconds_t timestamp = 1000000;
 
     Frame frame(samples, FrameSz);
@@ -246,16 +245,16 @@ TEST(channel_mapper_writer, large_frame_downmix) {
 TEST(channel_mapper_writer, large_frame_nocts) {
     enum { FrameSz = MaxSz * 4 };
 
-    const SampleSpec in_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                             ChanMask_Surround_Stereo);
-    const SampleSpec out_spec(MaxSz, ChanLayout_Surround, ChanOrder_Smpte,
-                              ChanMask_Surround_Mono);
+    const SampleSpec in_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                             ChanOrder_Smpte, ChanMask_Surround_Stereo);
+    const SampleSpec out_spec(MaxSz, Sample_RawFormat, ChanLayout_Surround,
+                              ChanOrder_Smpte, ChanMask_Surround_Mono);
 
     test::MockWriter mock_writer;
-    ChannelMapperWriter mapper_writer(mock_writer, buffer_factory, in_spec, out_spec);
+    ChannelMapperWriter mapper_writer(mock_writer, frame_factory, in_spec, out_spec);
 
     sample_t samples[FrameSz] = {};
-    const unsigned flags = Frame::FlagIncomplete;
+    const unsigned flags = Frame::FlagNotComplete;
 
     Frame frame(samples, FrameSz);
     frame.set_flags(flags);

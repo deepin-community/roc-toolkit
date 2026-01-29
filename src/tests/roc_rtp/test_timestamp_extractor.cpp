@@ -8,7 +8,6 @@
 
 #include <CppUTest/TestHarness.h>
 
-#include "roc_core/buffer_factory.h"
 #include "roc_core/heap_arena.h"
 #include "roc_core/scoped_ptr.h"
 #include "roc_core/stddefs.h"
@@ -17,7 +16,7 @@
 #include "roc_packet/queue.h"
 #include "roc_packet/units.h"
 #include "roc_rtp/composer.h"
-#include "roc_rtp/format_map.h"
+#include "roc_rtp/encoding_map.h"
 #include "roc_rtp/parser.h"
 #include "roc_rtp/timestamp_extractor.h"
 
@@ -25,6 +24,25 @@ namespace roc {
 namespace rtp {
 
 namespace {
+
+enum { MaxBufSize = 100 };
+
+core::HeapArena arena;
+packet::PacketFactory packet_factory(arena, MaxBufSize);
+
+packet::PacketPtr new_packet(packet::seqnum_t sn,
+                             packet::stream_timestamp_t ts,
+                             core::nanoseconds_t capt_ts) {
+    packet::PacketPtr packet = packet_factory.new_packet();
+    CHECK(packet);
+
+    packet->add_flags(packet::Packet::FlagRTP);
+    packet->rtp()->seqnum = sn;
+    packet->rtp()->stream_timestamp = ts;
+    packet->rtp()->capture_timestamp = capt_ts;
+
+    return packet;
+}
 
 class StatusWriter : public packet::IWriter, public core::NonCopyable<> {
 public:
@@ -40,22 +58,6 @@ private:
     status::StatusCode code_;
 };
 
-core::HeapArena arena;
-static packet::PacketFactory packet_factory(arena);
-
-packet::PacketPtr new_packet(packet::seqnum_t sn,
-                             packet::stream_timestamp_t ts,
-                             core::nanoseconds_t capt_ts) {
-    packet::PacketPtr packet = packet_factory.new_packet();
-    CHECK(packet);
-
-    packet->add_flags(packet::Packet::FlagRTP);
-    packet->rtp()->seqnum = sn;
-    packet->rtp()->stream_timestamp = ts;
-    packet->rtp()->capture_timestamp = capt_ts;
-
-    return packet;
-}
 } // namespace
 
 TEST_GROUP(timestamp_extractor) {};
@@ -63,7 +65,8 @@ TEST_GROUP(timestamp_extractor) {};
 TEST(timestamp_extractor, single_write) {
     // 1 second = 1000 samples
     const audio::SampleSpec sample_spec =
-        audio::SampleSpec(1000, audio::ChanLayout_Surround, audio::ChanOrder_Smpte, 0x1);
+        audio::SampleSpec(1000, audio::Sample_RawFormat, audio::ChanLayout_Surround,
+                          audio::ChanOrder_Smpte, 0x1);
 
     const core::nanoseconds_t cts = 1691499037871419405;
     const packet::stream_timestamp_t rts = 2222;
@@ -76,31 +79,32 @@ TEST(timestamp_extractor, single_write) {
 
     // write packet
     packet::PacketPtr wp = new_packet(555, rts, cts);
-    UNSIGNED_LONGS_EQUAL(status::StatusOK, extractor.write(wp));
+    LONGS_EQUAL(status::StatusOK, extractor.write(wp));
 
     // ensure packet was passed to inner writer
-    CHECK_EQUAL(1, queue.size());
+    UNSIGNED_LONGS_EQUAL(1, queue.size());
     packet::PacketPtr rp;
-    UNSIGNED_LONGS_EQUAL(status::StatusOK, queue.read(rp));
+    LONGS_EQUAL(status::StatusOK, queue.read(rp));
     CHECK_EQUAL(wp, rp);
 
     // get mapping for exact time
     CHECK_TRUE(extractor.has_mapping());
-    CHECK_EQUAL(rts, extractor.get_mapping(cts));
+    UNSIGNED_LONGS_EQUAL(rts, extractor.get_mapping(cts));
 
     // get mapping for time in future
     CHECK_TRUE(extractor.has_mapping());
-    CHECK_EQUAL(rts + 1000, extractor.get_mapping(cts + core::Second));
+    UNSIGNED_LONGS_EQUAL(rts + 1000, extractor.get_mapping(cts + core::Second));
 
     // get mapping for time in past
     CHECK_TRUE(extractor.has_mapping());
-    CHECK_EQUAL(rts - 1000, extractor.get_mapping(cts - core::Second));
+    UNSIGNED_LONGS_EQUAL(rts - 1000, extractor.get_mapping(cts - core::Second));
 }
 
 TEST(timestamp_extractor, failed_to_write_packet) {
     // 1 second = 1000 samples
     const audio::SampleSpec sample_spec =
-        audio::SampleSpec(1000, audio::ChanLayout_Surround, audio::ChanOrder_Smpte, 0x1);
+        audio::SampleSpec(1000, audio::Sample_RawFormat, audio::ChanLayout_Surround,
+                          audio::ChanOrder_Smpte, 0x1);
 
     const status::StatusCode codes[] = {
         status::StatusUnknown,
@@ -112,7 +116,7 @@ TEST(timestamp_extractor, failed_to_write_packet) {
         TimestampExtractor extractor(writer, sample_spec);
 
         packet::PacketPtr pp = new_packet(555, 0, 0);
-        UNSIGNED_LONGS_EQUAL(codes[n], extractor.write(pp));
+        LONGS_EQUAL(codes[n], extractor.write(pp));
     }
 }
 

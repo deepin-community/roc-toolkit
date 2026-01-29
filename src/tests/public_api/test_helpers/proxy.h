@@ -31,11 +31,10 @@ public:
     Proxy(const roc_endpoint* receiver_source_endp,
           const roc_endpoint* receiver_repair_endp,
           size_t n_source_packets,
-          size_t n_repair_packets,
-          core::HeapArena& arena,
-          packet::PacketFactory& packet_factory,
-          core::BufferFactory<uint8_t>& byte_buffer_factory)
-        : net_loop_(packet_factory, byte_buffer_factory, arena)
+          size_t n_repair_packets)
+        : packet_pool_("proxy_packet_pool", arena_)
+        , buffer_pool_("proxy_buffer_pool", arena_, 2000)
+        , net_loop_(packet_pool_, buffer_pool_, arena_)
         , n_source_packets_(n_source_packets)
         , n_repair_packets_(n_repair_packets)
         , pos_(0) {
@@ -69,26 +68,33 @@ public:
         netio::NetworkLoop::PortHandle send_port = NULL;
 
         {
-            netio::NetworkLoop::Tasks::AddUdpSenderPort task(send_config_);
-            CHECK(net_loop_.schedule_and_wait(task));
+            netio::NetworkLoop::Tasks::AddUdpPort add_task(send_config_);
+            CHECK(net_loop_.schedule_and_wait(add_task));
 
-            send_port = task.get_handle();
+            send_port = add_task.get_handle();
             CHECK(send_port);
 
-            writer_ = task.get_writer();
-            CHECK(writer_);
+            netio::NetworkLoop::Tasks::StartUdpSend send_task(add_task.get_handle());
+            CHECK(net_loop_.schedule_and_wait(send_task));
+            writer_ = &send_task.get_outbound_writer();
         }
 
         {
-            netio::NetworkLoop::Tasks::AddUdpReceiverPort task(recv_source_config_,
-                                                               *this);
-            CHECK(net_loop_.schedule_and_wait(task));
+            netio::NetworkLoop::Tasks::AddUdpPort add_task(recv_source_config_);
+            CHECK(net_loop_.schedule_and_wait(add_task));
+
+            netio::NetworkLoop::Tasks::StartUdpRecv recv_task(add_task.get_handle(),
+                                                              *this);
+            CHECK(net_loop_.schedule_and_wait(recv_task));
         }
 
         {
-            netio::NetworkLoop::Tasks::AddUdpReceiverPort task(recv_repair_config_,
-                                                               *this);
-            CHECK(net_loop_.schedule_and_wait(task));
+            netio::NetworkLoop::Tasks::AddUdpPort add_task(recv_repair_config_);
+            CHECK(net_loop_.schedule_and_wait(add_task));
+
+            netio::NetworkLoop::Tasks::StartUdpRecv recv_task(add_task.get_handle(),
+                                                              *this);
+            CHECK(net_loop_.schedule_and_wait(recv_task));
         }
 
         CHECK(roc_endpoint_allocate(&input_source_endp_) == 0);
@@ -164,13 +170,17 @@ private:
         return true;
     }
 
-    netio::UdpSenderConfig send_config_;
+    core::HeapArena arena_;
+
+    core::SlabPool<packet::Packet> packet_pool_;
+    core::SlabPool<core::Buffer> buffer_pool_;
+
+    netio::UdpConfig send_config_;
+    netio::UdpConfig recv_source_config_;
+    netio::UdpConfig recv_repair_config_;
 
     roc_endpoint* input_source_endp_;
     roc_endpoint* input_repair_endp_;
-
-    netio::UdpReceiverConfig recv_source_config_;
-    netio::UdpReceiverConfig recv_repair_config_;
 
     address::SocketAddr receiver_source_endp_;
     address::SocketAddr receiver_repair_endp_;

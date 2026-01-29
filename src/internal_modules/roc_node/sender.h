@@ -38,7 +38,7 @@ public:
     typedef uint64_t slot_index_t;
 
     //! Initialize.
-    Sender(Context& context, const pipeline::SenderConfig& pipeline_config);
+    Sender(Context& context, const pipeline::SenderSinkConfig& pipeline_config);
 
     //! Deinitialize.
     ~Sender();
@@ -47,24 +47,35 @@ public:
     bool is_valid() const;
 
     //! Set interface config.
-    bool configure(slot_index_t slot_index,
-                   address::Interface iface,
-                   const netio::UdpSenderConfig& config);
+    ROC_ATTR_NODISCARD bool configure(slot_index_t slot_index,
+                                      address::Interface iface,
+                                      const netio::UdpConfig& config);
 
     //! Connect to remote endpoint.
-    bool connect(slot_index_t slot_index,
-                 address::Interface iface,
-                 const address::EndpointUri& uri);
+    ROC_ATTR_NODISCARD bool connect(slot_index_t slot_index,
+                                    address::Interface iface,
+                                    const address::EndpointUri& uri);
 
     //! Remove slot.
-    bool unlink(slot_index_t slot_index);
+    ROC_ATTR_NODISCARD bool unlink(slot_index_t slot_index);
 
-    //! Get slot metrics.
-    //! @remarks
-    //!  Metrics are written into provided arguments.
-    bool get_metrics(slot_index_t slot_index,
-                     pipeline::SenderSlotMetrics& slot_metrics,
-                     pipeline::SenderSessionMetrics& sess_metrics);
+    //! Callback for slot metrics.
+    typedef void (*slot_metrics_func_t)(const pipeline::SenderSlotMetrics& slot_metrics,
+                                        void* slot_arg);
+
+    //! Callback for participant metrics.
+    typedef void (*party_metrics_func_t)(
+        const pipeline::SenderParticipantMetrics& party_metrics,
+        size_t party_index,
+        void* party_arg);
+
+    //! Get metrics.
+    ROC_ATTR_NODISCARD bool get_metrics(slot_index_t slot_index,
+                                        slot_metrics_func_t slot_metrics_func,
+                                        void* slot_metrics_arg,
+                                        party_metrics_func_t party_metrics_func,
+                                        size_t* party_metrics_size,
+                                        void* party_metrics_arg);
 
     //! Check if there are incomplete or broken slots.
     bool has_incomplete();
@@ -77,18 +88,18 @@ public:
 
 private:
     struct Port {
-        netio::UdpSenderConfig config;
-        netio::UdpSenderConfig orig_config;
+        netio::UdpConfig config;
+        netio::UdpConfig orig_config;
         netio::NetworkLoop::PortHandle handle;
-        packet::IWriter* writer;
+        packet::IWriter* outbound_writer;
 
         Port()
             : handle(NULL)
-            , writer(NULL) {
+            , outbound_writer(NULL) {
         }
     };
 
-    struct Slot : core::RefCounted<Slot, core::PoolAllocation>, core::HashmapNode {
+    struct Slot : core::RefCounted<Slot, core::PoolAllocation>, core::HashmapNode<> {
         const slot_index_t index;
         pipeline::SenderLoop::SlotHandle handle;
         Port ports[address::Iface_Max];
@@ -143,6 +154,9 @@ private:
 
     bool used_interfaces_[address::Iface_Max];
     address::Protocol used_protocols_[address::Iface_Max];
+
+    pipeline::SenderSlotMetrics slot_metrics_;
+    core::Array<pipeline::SenderParticipantMetrics, 8> party_metrics_;
 
     bool valid_;
 };

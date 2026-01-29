@@ -8,11 +8,9 @@
 
 #include <CppUTest/TestHarness.h>
 
-#include "roc_core/time.h"
 #include "test_helpers/mock_reader.h"
 
 #include "roc_audio/mixer.h"
-#include "roc_core/buffer_factory.h"
 #include "roc_core/heap_arena.h"
 #include "roc_core/stddefs.h"
 
@@ -21,14 +19,17 @@ namespace audio {
 
 namespace {
 
-enum { BufSz = 100, SampleRate = 44100, ChannelMask = 0x1, MaxBufSz = 500 };
+enum { BufSz = 100, MaxBufSz = 500, SampleRate = 44100, ChannelMask = 0x1 };
+
+const SampleSpec sample_spec(
+    SampleRate, Sample_RawFormat, ChanLayout_Surround, ChanOrder_Smpte, ChannelMask);
 
 core::HeapArena arena;
-core::BufferFactory<sample_t> buffer_factory(arena, MaxBufSz);
-core::BufferFactory<sample_t> large_buffer_factory(arena, MaxBufSz * 10);
+FrameFactory frame_factory(arena, MaxBufSz * sizeof(sample_t));
+FrameFactory large_frame_factory(arena, MaxBufSz * 10 * sizeof(sample_t));
 
 core::Slice<sample_t> new_buffer(size_t sz) {
-    core::Slice<sample_t> buf = large_buffer_factory.new_buffer();
+    core::Slice<sample_t> buf = large_frame_factory.new_raw_buffer();
     buf.reslice(0, sz);
     return buf;
 }
@@ -44,7 +45,7 @@ void expect_output(Mixer& mixer,
     CHECK(mixer.read(frame));
 
     for (size_t n = 0; n < sz; n++) {
-        DOUBLES_EQUAL((double)value, (double)frame.samples()[n], 0.0001);
+        DOUBLES_EQUAL((double)value, (double)frame.raw_samples()[n], 0.0001);
     }
 
     UNSIGNED_LONGS_EQUAL(flags, frame.flags());
@@ -62,7 +63,7 @@ void expect_output(Mixer& mixer,
 TEST_GROUP(mixer) {};
 
 TEST(mixer, no_readers) {
-    Mixer mixer(buffer_factory, true);
+    Mixer mixer(frame_factory, sample_spec, true);
     CHECK(mixer.is_valid());
 
     expect_output(mixer, BufSz, 0);
@@ -71,7 +72,7 @@ TEST(mixer, no_readers) {
 TEST(mixer, one_reader) {
     test::MockReader reader;
 
-    Mixer mixer(buffer_factory, true);
+    Mixer mixer(frame_factory, sample_spec, true);
     CHECK(mixer.is_valid());
 
     mixer.add_input(reader);
@@ -85,7 +86,7 @@ TEST(mixer, one_reader) {
 TEST(mixer, one_reader_large) {
     test::MockReader reader;
 
-    Mixer mixer(buffer_factory, true);
+    Mixer mixer(frame_factory, sample_spec, true);
     CHECK(mixer.is_valid());
 
     mixer.add_input(reader);
@@ -100,7 +101,7 @@ TEST(mixer, two_readers) {
     test::MockReader reader1;
     test::MockReader reader2;
 
-    Mixer mixer(buffer_factory, true);
+    Mixer mixer(frame_factory, sample_spec, true);
     CHECK(mixer.is_valid());
 
     mixer.add_input(reader1);
@@ -119,7 +120,7 @@ TEST(mixer, remove_reader) {
     test::MockReader reader1;
     test::MockReader reader2;
 
-    Mixer mixer(buffer_factory, true);
+    Mixer mixer(frame_factory, sample_spec, true);
     CHECK(mixer.is_valid());
 
     mixer.add_input(reader1);
@@ -149,7 +150,7 @@ TEST(mixer, clamp) {
     test::MockReader reader1;
     test::MockReader reader2;
 
-    Mixer mixer(buffer_factory, true);
+    Mixer mixer(frame_factory, sample_spec, true);
     CHECK(mixer.is_valid());
 
     mixer.add_input(reader1);
@@ -180,23 +181,23 @@ TEST(mixer, flags) {
     test::MockReader reader1;
     test::MockReader reader2;
 
-    Mixer mixer(buffer_factory, true);
+    Mixer mixer(frame_factory, sample_spec, true);
     CHECK(mixer.is_valid());
 
     mixer.add_input(reader1);
     mixer.add_input(reader2);
 
     reader1.add_samples(BigBatch, 0.1f, 0);
-    reader1.add_samples(BigBatch, 0.1f, Frame::FlagNonblank);
+    reader1.add_samples(BigBatch, 0.1f, Frame::FlagNotBlank);
     reader1.add_samples(BigBatch, 0.1f, 0);
 
-    reader2.add_samples(BigBatch, 0.1f, Frame::FlagIncomplete);
+    reader2.add_samples(BigBatch, 0.1f, Frame::FlagNotComplete);
     reader2.add_samples(BigBatch / 2, 0.1f, 0);
-    reader2.add_samples(BigBatch / 2, 0.1f, Frame::FlagDrops);
+    reader2.add_samples(BigBatch / 2, 0.1f, Frame::FlagPacketDrops);
     reader2.add_samples(BigBatch, 0.1f, 0);
 
-    expect_output(mixer, BigBatch, 0.2f, Frame::FlagIncomplete);
-    expect_output(mixer, BigBatch, 0.2f, Frame::FlagNonblank | Frame::FlagDrops);
+    expect_output(mixer, BigBatch, 0.2f, Frame::FlagNotComplete);
+    expect_output(mixer, BigBatch, 0.2f, Frame::FlagNotBlank | Frame::FlagPacketDrops);
     expect_output(mixer, BigBatch, 0.2f, 0);
 
     CHECK(reader1.num_unread() == 0);
@@ -205,13 +206,13 @@ TEST(mixer, flags) {
 
 TEST(mixer, timestamps_one_reader) {
     // BufSz samples per second
-    const SampleSpec sample_spec(BufSz, ChanLayout_Surround, ChanOrder_Smpte,
-                                 ChanMask_Surround_Mono);
+    const SampleSpec sample_spec(BufSz, Sample_RawFormat, ChanLayout_Surround,
+                                 ChanOrder_Smpte, ChanMask_Surround_Mono);
     const core::nanoseconds_t start_ts = 1000000000000;
 
     test::MockReader reader;
 
-    Mixer mixer(buffer_factory, true);
+    Mixer mixer(frame_factory, sample_spec, true);
     CHECK(mixer.is_valid());
 
     mixer.add_input(reader);
@@ -232,15 +233,15 @@ TEST(mixer, timestamps_one_reader) {
 
 TEST(mixer, timestamps_two_readers) {
     // BufSz samples per second
-    const SampleSpec sample_spec(BufSz, ChanLayout_Surround, ChanOrder_Smpte,
-                                 ChanMask_Surround_Mono);
+    const SampleSpec sample_spec(BufSz, Sample_RawFormat, ChanLayout_Surround,
+                                 ChanOrder_Smpte, ChanMask_Surround_Mono);
     const core::nanoseconds_t start_ts1 = 2000000000000;
     const core::nanoseconds_t start_ts2 = 1000000000000;
 
     test::MockReader reader1;
     test::MockReader reader2;
 
-    Mixer mixer(buffer_factory, true);
+    Mixer mixer(frame_factory, sample_spec, true);
     CHECK(mixer.is_valid());
 
     mixer.add_input(reader1);
@@ -269,8 +270,8 @@ TEST(mixer, timestamps_two_readers) {
 
 TEST(mixer, timestamps_partial) {
     // BufSz samples per second
-    const SampleSpec sample_spec(BufSz, ChanLayout_Surround, ChanOrder_Smpte,
-                                 ChanMask_Surround_Mono);
+    const SampleSpec sample_spec(BufSz, Sample_RawFormat, ChanLayout_Surround,
+                                 ChanOrder_Smpte, ChanMask_Surround_Mono);
     const core::nanoseconds_t start_ts1 = 2000000000000;
     const core::nanoseconds_t start_ts2 = 1000000000000;
 
@@ -278,7 +279,7 @@ TEST(mixer, timestamps_partial) {
     test::MockReader reader2;
     test::MockReader reader3;
 
-    Mixer mixer(buffer_factory, true);
+    Mixer mixer(frame_factory, sample_spec, true);
     CHECK(mixer.is_valid());
 
     mixer.add_input(reader1);
@@ -313,8 +314,8 @@ TEST(mixer, timestamps_partial) {
 
 TEST(mixer, timestamps_no_overflow) {
     // BufSz samples per second
-    const SampleSpec sample_spec(BufSz, ChanLayout_Surround, ChanOrder_Smpte,
-                                 ChanMask_Surround_Mono);
+    const SampleSpec sample_spec(BufSz, Sample_RawFormat, ChanLayout_Surround,
+                                 ChanOrder_Smpte, ChanMask_Surround_Mono);
     const core::nanoseconds_t start_ts1 = 9000000000000000000ll;
     const core::nanoseconds_t start_ts2 = 9100000000000000000ll;
 
@@ -325,7 +326,7 @@ TEST(mixer, timestamps_no_overflow) {
     test::MockReader reader1;
     test::MockReader reader2;
 
-    Mixer mixer(buffer_factory, true);
+    Mixer mixer(frame_factory, sample_spec, true);
     CHECK(mixer.is_valid());
 
     mixer.add_input(reader1);
@@ -354,14 +355,14 @@ TEST(mixer, timestamps_no_overflow) {
 }
 
 TEST(mixer, timestamps_disabled) {
-    const SampleSpec sample_spec(BufSz, ChanLayout_Surround, ChanOrder_Smpte,
-                                 ChanMask_Surround_Mono);
+    const SampleSpec sample_spec(BufSz, Sample_RawFormat, ChanLayout_Surround,
+                                 ChanOrder_Smpte, ChanMask_Surround_Mono);
     const core::nanoseconds_t start_ts = 1000000000000;
 
     test::MockReader reader1;
     test::MockReader reader2;
 
-    Mixer mixer(buffer_factory, false);
+    Mixer mixer(frame_factory, sample_spec, false);
     CHECK(mixer.is_valid());
 
     reader1.enable_timestamps(start_ts, sample_spec);

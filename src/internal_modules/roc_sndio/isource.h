@@ -20,13 +20,13 @@ namespace roc {
 namespace sndio {
 
 //! Source interface.
-class ISource : public IDevice, public audio::IFrameReader {
+class ISource : virtual public IDevice, public audio::IFrameReader {
 public:
     virtual ~ISource();
 
     //! Adjust source clock to match consumer clock.
     //! @remarks
-    //!  Invoked regularly after reading every or a several frames.
+    //!  Invoked regularly after reading every or several frames.
     //!  @p timestamp defines the time in Unix domain when the last sample of the last
     //!  frame read from source is going to be actually processed by consumer.
     virtual void reclock(core::nanoseconds_t timestamp) = 0;

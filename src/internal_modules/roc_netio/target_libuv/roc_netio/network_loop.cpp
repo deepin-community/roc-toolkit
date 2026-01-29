@@ -16,14 +16,12 @@
 namespace roc {
 namespace netio {
 
-NetworkLoop::Tasks::AddUdpReceiverPort::AddUdpReceiverPort(UdpReceiverConfig& config,
-                                                           packet::IWriter& writer) {
-    func_ = &NetworkLoop::task_add_udp_receiver_;
+NetworkLoop::Tasks::AddUdpPort::AddUdpPort(UdpConfig& config) {
+    func_ = &NetworkLoop::task_add_udp_port_;
     config_ = &config;
-    writer_ = &writer;
 }
 
-NetworkLoop::PortHandle NetworkLoop::Tasks::AddUdpReceiverPort::get_handle() const {
+NetworkLoop::PortHandle NetworkLoop::Tasks::AddUdpPort::get_handle() const {
     if (!success()) {
         return NULL;
     }
@@ -31,26 +29,28 @@ NetworkLoop::PortHandle NetworkLoop::Tasks::AddUdpReceiverPort::get_handle() con
     return (PortHandle)port_handle_;
 }
 
-NetworkLoop::Tasks::AddUdpSenderPort::AddUdpSenderPort(UdpSenderConfig& config) {
-    func_ = &NetworkLoop::task_add_udp_sender_;
-    config_ = &config;
-    writer_ = NULL;
+NetworkLoop::Tasks::StartUdpSend::StartUdpSend(PortHandle handle) {
+    func_ = &NetworkLoop::task_start_udp_send_;
+    if (!handle) {
+        roc_panic("network loop: port handle is null");
+    }
+    port_ = (BasicPort*)handle;
 }
 
-NetworkLoop::PortHandle NetworkLoop::Tasks::AddUdpSenderPort::get_handle() const {
-    if (!success()) {
-        return NULL;
-    }
-    roc_panic_if_not(port_handle_);
-    return (PortHandle)port_handle_;
+packet::IWriter& NetworkLoop::Tasks::StartUdpSend::get_outbound_writer() const {
+    roc_panic_if(!success());
+    roc_panic_if(!outbound_writer_);
+    return *outbound_writer_;
 }
 
-packet::IWriter* NetworkLoop::Tasks::AddUdpSenderPort::get_writer() const {
-    if (!success()) {
-        return NULL;
+NetworkLoop::Tasks::StartUdpRecv::StartUdpRecv(PortHandle handle,
+                                               packet::IWriter& inbound_writer) {
+    func_ = &NetworkLoop::task_start_udp_recv_;
+    if (!handle) {
+        roc_panic("network loop: port handle is null");
     }
-    roc_panic_if_not(writer_);
-    return writer_;
+    port_ = (BasicPort*)handle;
+    inbound_writer_ = &inbound_writer;
 }
 
 NetworkLoop::Tasks::AddTcpServerPort::AddTcpServerPort(TcpServerConfig& config,
@@ -86,7 +86,7 @@ NetworkLoop::PortHandle NetworkLoop::Tasks::AddTcpClientPort::get_handle() const
 NetworkLoop::Tasks::RemovePort::RemovePort(PortHandle handle) {
     func_ = &NetworkLoop::task_remove_port_;
     if (!handle) {
-        roc_panic("network loop: handle is null");
+        roc_panic("network loop: port handle is null");
     }
     port_ = (BasicPort*)handle;
 }
@@ -102,11 +102,10 @@ NetworkLoop::Tasks::ResolveEndpointAddress::get_address() const {
     return resolve_req_.resolved_address;
 }
 
-NetworkLoop::NetworkLoop(packet::PacketFactory& packet_factory,
-                         core::BufferFactory<uint8_t>& buffer_factory,
+NetworkLoop::NetworkLoop(core::IPool& packet_pool,
+                         core::IPool& buffer_pool,
                          core::IArena& arena)
-    : packet_factory_(packet_factory)
-    , buffer_factory_(buffer_factory)
+    : packet_factory_(packet_pool, buffer_pool)
     , arena_(arena)
     , started_(false)
     , loop_initialized_(false)
@@ -383,16 +382,14 @@ void NetworkLoop::close_all_sems_() {
     }
 }
 
-void NetworkLoop::task_add_udp_receiver_(NetworkTask& base_task) {
-    Tasks::AddUdpReceiverPort& task = (Tasks::AddUdpReceiverPort&)base_task;
+void NetworkLoop::task_add_udp_port_(NetworkTask& base_task) {
+    Tasks::AddUdpPort& task = (Tasks::AddUdpPort&)base_task;
 
-    core::SharedPtr<UdpReceiverPort> port = new (arena_) UdpReceiverPort(
-        *task.config_, *task.writer_, loop_, packet_factory_, buffer_factory_, arena_);
+    core::SharedPtr<UdpPort> port =
+        new (arena_) UdpPort(*task.config_, loop_, packet_factory_, arena_);
     if (!port) {
-        roc_log(
-            LogError,
-            "network loop: can't add udp receiver port %s: can't allocate udp receiver",
-            address::socket_addr_to_str(task.config_->bind_address).c_str());
+        roc_log(LogError, "network loop: can't add udp port %s: allocate failed",
+                address::socket_addr_to_str(task.config_->bind_address).c_str());
         task.success_ = false;
         task.state_ = NetworkTask::StateFinishing;
         return;
@@ -401,8 +398,7 @@ void NetworkLoop::task_add_udp_receiver_(NetworkTask& base_task) {
     task.port_ = port;
 
     if (!port->open()) {
-        roc_log(LogError,
-                "network loop: can't add udp receiver port %s: can't start udp receiver",
+        roc_log(LogError, "network loop: can't add udp port %s: start failed",
                 address::socket_addr_to_str(task.config_->bind_address).c_str());
         task.success_ = false;
         if (async_close_port_(port, &task) == AsyncOp_Started) {
@@ -423,41 +419,41 @@ void NetworkLoop::task_add_udp_receiver_(NetworkTask& base_task) {
     task.state_ = NetworkTask::StateFinishing;
 }
 
-void NetworkLoop::task_add_udp_sender_(NetworkTask& base_task) {
-    Tasks::AddUdpSenderPort& task = (Tasks::AddUdpSenderPort&)base_task;
+void NetworkLoop::task_start_udp_send_(NetworkTask& base_task) {
+    Tasks::StartUdpSend& task = (Tasks::StartUdpSend&)base_task;
 
-    core::SharedPtr<UdpSenderPort> port =
-        new (arena_) UdpSenderPort(*task.config_, loop_, arena_);
-    if (!port) {
-        roc_log(LogError,
-                "network loop: can't add udp sender port %s: can't allocate udp sender",
-                address::socket_addr_to_str(task.config_->bind_address).c_str());
+    roc_log(LogDebug, "network loop: starting sending packets on port %s",
+            task.port_->descriptor());
+
+    core::SharedPtr<UdpPort> port = (UdpPort*)task.port_.get();
+
+    if (!(task.outbound_writer_ = port->start_send())) {
+        roc_log(LogError, "network loop: can't start sending on port %s",
+                task.port_->descriptor());
         task.success_ = false;
         task.state_ = NetworkTask::StateFinishing;
         return;
     }
 
-    task.port_ = port;
+    task.success_ = true;
+    task.state_ = NetworkTask::StateFinishing;
+}
 
-    if (!port->open()) {
-        roc_log(LogError,
-                "network loop: can't add udp sender port %s: can't start udp sender",
-                address::socket_addr_to_str(task.config_->bind_address).c_str());
+void NetworkLoop::task_start_udp_recv_(NetworkTask& base_task) {
+    Tasks::StartUdpRecv& task = (Tasks::StartUdpRecv&)base_task;
+
+    roc_log(LogDebug, "network loop: starting receiving packets on port %s",
+            task.port_->descriptor());
+
+    core::SharedPtr<UdpPort> port = (UdpPort*)task.port_.get();
+
+    if (!port->start_recv(*task.inbound_writer_)) {
+        roc_log(LogError, "network loop: can't start receiving on port %s",
+                task.port_->descriptor());
         task.success_ = false;
-        if (async_close_port_(port, &task) == AsyncOp_Started) {
-            task.state_ = NetworkTask::StateClosingPort;
-        } else {
-            task.state_ = NetworkTask::StateFinishing;
-        }
+        task.state_ = NetworkTask::StateFinishing;
         return;
     }
-
-    open_ports_.push_back(*port);
-    update_num_ports_();
-
-    task.config_->bind_address = port->bind_address();
-    task.port_handle_ = port.get();
-    task.writer_ = port.get();
 
     task.success_ = true;
     task.state_ = NetworkTask::StateFinishing;

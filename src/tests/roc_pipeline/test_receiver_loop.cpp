@@ -10,12 +10,11 @@
 
 #include "test_helpers/mock_scheduler.h"
 
-#include "roc_core/buffer_factory.h"
 #include "roc_core/heap_arena.h"
+#include "roc_core/slab_pool.h"
 #include "roc_fec/codec_map.h"
-#include "roc_packet/packet_factory.h"
 #include "roc_pipeline/receiver_loop.h"
-#include "roc_rtp/format_map.h"
+#include "roc_rtp/encoding_map.h"
 
 namespace roc {
 namespace pipeline {
@@ -25,11 +24,19 @@ namespace {
 enum { MaxBufSize = 1000 };
 
 core::HeapArena arena;
-core::BufferFactory<audio::sample_t> sample_buffer_factory(arena, MaxBufSize);
-core::BufferFactory<uint8_t> byte_buffer_factory(arena, MaxBufSize);
-packet::PacketFactory packet_factory(arena);
 
-rtp::FormatMap format_map(arena);
+core::SlabPool<packet::Packet> packet_pool("packet_pool", arena);
+core::SlabPool<core::Buffer>
+    packet_buffer_pool("packet_buffer_pool", arena, sizeof(core::Buffer) + MaxBufSize);
+core::SlabPool<core::Buffer>
+    frame_buffer_pool("frame_buffer_pool",
+                      arena,
+                      sizeof(core::Buffer) + MaxBufSize * sizeof(audio::sample_t));
+
+packet::PacketFactory packet_factory(packet_pool, packet_buffer_pool);
+audio::FrameFactory frame_factory(frame_buffer_pool);
+
+rtp::EncodingMap encoding_map(arena);
 
 class TaskIssuer : public IPipelineTaskCompleter {
 public:
@@ -49,7 +56,8 @@ public:
     }
 
     void start() {
-        task_create_slot_ = new ReceiverLoop::Tasks::CreateSlot();
+        ReceiverSlotConfig slot_config;
+        task_create_slot_ = new ReceiverLoop::Tasks::CreateSlot(slot_config);
         pipeline_.schedule(*task_create_slot_, *this);
     }
 
@@ -66,7 +74,8 @@ public:
             slot_ = task_create_slot_->get_handle();
             roc_panic_if_not(slot_);
             task_add_endpoint_ = new ReceiverLoop::Tasks::AddEndpoint(
-                slot_, address::Iface_AudioSource, address::Proto_RTP);
+                slot_, address::Iface_AudioSource, address::Proto_RTP,
+                address::SocketAddr(), NULL);
             pipeline_.schedule(*task_add_endpoint_, *this);
             return;
         }
@@ -102,24 +111,25 @@ private:
 TEST_GROUP(receiver_loop) {
     test::MockScheduler scheduler;
 
-    ReceiverConfig config;
+    ReceiverSourceConfig config;
 
     void setup() {
-        config.common.enable_timing = false;
-        config.default_session.latency_monitor.fe_enable = false;
+        config.session_defaults.latency.tuner_backend = audio::LatencyTunerBackend_Niq;
+        config.session_defaults.latency.tuner_profile = audio::LatencyTunerProfile_Intact;
     }
 };
 
 TEST(receiver_loop, endpoints_sync) {
-    ReceiverLoop receiver(scheduler, config, format_map, packet_factory,
-                          byte_buffer_factory, sample_buffer_factory, arena);
+    ReceiverLoop receiver(scheduler, config, encoding_map, packet_pool,
+                          packet_buffer_pool, frame_buffer_pool, arena);
 
     CHECK(receiver.is_valid());
 
     ReceiverLoop::SlotHandle slot = NULL;
 
     {
-        ReceiverLoop::Tasks::CreateSlot task;
+        ReceiverSlotConfig config;
+        ReceiverLoop::Tasks::CreateSlot task(config);
         CHECK(receiver.schedule_and_wait(task));
         CHECK(task.success());
         CHECK(task.get_handle());
@@ -129,10 +139,11 @@ TEST(receiver_loop, endpoints_sync) {
 
     {
         ReceiverLoop::Tasks::AddEndpoint task(slot, address::Iface_AudioSource,
-                                              address::Proto_RTP);
+                                              address::Proto_RTP, address::SocketAddr(),
+                                              NULL);
         CHECK(receiver.schedule_and_wait(task));
         CHECK(task.success());
-        CHECK(task.get_writer());
+        CHECK(task.get_inbound_writer());
     }
 
     {
@@ -143,8 +154,8 @@ TEST(receiver_loop, endpoints_sync) {
 }
 
 TEST(receiver_loop, endpoints_async) {
-    ReceiverLoop receiver(scheduler, config, format_map, packet_factory,
-                          byte_buffer_factory, sample_buffer_factory, arena);
+    ReceiverLoop receiver(scheduler, config, encoding_map, packet_pool,
+                          packet_buffer_pool, frame_buffer_pool, arena);
 
     CHECK(receiver.is_valid());
 

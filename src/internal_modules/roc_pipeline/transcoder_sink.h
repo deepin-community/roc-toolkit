@@ -13,13 +13,12 @@
 #define ROC_PIPELINE_TRANSCODER_SINK_H_
 
 #include "roc_audio/channel_mapper_writer.h"
+#include "roc_audio/frame_factory.h"
 #include "roc_audio/iresampler.h"
 #include "roc_audio/null_writer.h"
 #include "roc_audio/profiling_writer.h"
-#include "roc_audio/resampler_map.h"
-#include "roc_audio/resampler_profile.h"
 #include "roc_audio/resampler_writer.h"
-#include "roc_core/buffer_factory.h"
+#include "roc_core/ipool.h"
 #include "roc_core/optional.h"
 #include "roc_core/scoped_ptr.h"
 #include "roc_pipeline/config.h"
@@ -37,11 +36,17 @@ public:
     //! Initialize.
     TranscoderSink(const TranscoderConfig& config,
                    audio::IFrameWriter* output_writer,
-                   core::BufferFactory<audio::sample_t>& buffer_factory,
+                   core::IPool& buffer_pool,
                    core::IArena& arena);
 
     //! Check if the pipeline was successfully constructed.
     bool is_valid();
+
+    //! Cast IDevice to ISink.
+    virtual sndio::ISink* to_sink();
+
+    //! Cast IDevice to ISink.
+    virtual sndio::ISource* to_source();
 
     //! Get device type.
     virtual sndio::DeviceType type() const;
@@ -74,6 +79,8 @@ public:
     virtual void write(audio::Frame& frame);
 
 private:
+    audio::FrameFactory frame_factory_;
+
     audio::NullWriter null_writer_;
 
     core::Optional<audio::ChannelMapperWriter> channel_mapper_writer_;
@@ -83,9 +90,11 @@ private:
 
     core::Optional<audio::ProfilingWriter> profiler_;
 
-    audio::IFrameWriter* audio_writer_;
+    audio::IFrameWriter* frame_writer_;
 
-    const TranscoderConfig config_;
+    TranscoderConfig config_;
+
+    bool valid_;
 };
 
 } // namespace pipeline

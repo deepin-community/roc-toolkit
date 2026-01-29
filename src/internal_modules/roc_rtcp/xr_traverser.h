@@ -27,14 +27,20 @@ public:
     public:
         //! Iterator state.
         enum State {
-            BEGIN,      //!< Iterator created.
-            RRTR_BLOCK, //!< RRTR block (receiver reference time).
-            DRLL_BLOCK, //!< DLRR block (delay since last receiver report).
-            END         //!< Parsed whole packet.
+            BEGIN,                  //!< Iterator created.
+            RRTR_BLOCK,             //!< RRTR block (receiver reference time).
+            DLRR_BLOCK,             //!< DLRR block (delay since last receiver report).
+            MEASUREMENT_INFO_BLOCK, //!< Measurement information block.
+            DELAY_METRICS_BLOCK,    //!< Delay metrics block.
+            QUEUE_METRICS_BLOCK,    //!< Queue metrics block.
+            END                     //!< Parsed whole packet.
         };
 
         //! Advance iterator.
         State next();
+
+        //! Check if there were any parsing errors.
+        bool error() const;
 
         //! Get RRTR block (receiver reference time).
         //! @pre Can be used if next() returned RRTR_BLOCK.
@@ -44,19 +50,40 @@ public:
         //! @pre Can be used if next() returned DLRR_BLOCK.
         const header::XrDlrrBlock& get_dlrr() const;
 
+        //! Get measurement info block.
+        //! @pre Can be used if next() returned RRTR_MEASUREMENT_INFO_BLOCK
+        const header::XrMeasurementInfoBlock& get_measurement_info() const;
+
+        //! Get delay metrics block.
+        //! @pre Can be used if next() returned DELAY_METRICS_BLOCK
+        const header::XrDelayMetricsBlock& get_delay_metrics() const;
+
+        //! Get queue metrics block.
+        //! @pre Can be used if next() returned QUEUE_METRICS_BLOCK
+        const header::XrQueueMetricsBlock& get_queue_metrics() const;
+
     private:
         friend class XrTraverser;
 
         explicit Iterator(const XrTraverser& traverser);
+        void next_block_();
+        bool check_rrtr_();
+        bool check_dlrr_();
+        bool check_measurement_info_();
+        bool check_delay_metrics_();
+        bool check_queue_metrics_();
 
         State state_;
-        core::Slice<uint8_t> data_;
-        uint8_t* pcur_;
+        const core::Slice<uint8_t> buf_;
+        size_t cur_pos_;
+        const header::XrBlockHeader* cur_blk_header_;
+        size_t cur_blk_len_;
+        bool error_;
     };
 
     //! Initialize traverser.
     //! It will parse and iterate provided buffer.
-    explicit XrTraverser(const core::Slice<uint8_t>& data);
+    explicit XrTraverser(const core::Slice<uint8_t>& buf);
 
     //! Parse packet from buffer.
     bool parse();
@@ -72,9 +99,8 @@ public:
     const header::XrPacket& packet() const;
 
 private:
-    const core::Slice<uint8_t> data_;
+    core::Slice<uint8_t> buf_;
     bool parsed_;
-    size_t packet_len_;
     size_t blocks_count_;
 };
 

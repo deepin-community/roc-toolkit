@@ -16,18 +16,18 @@ namespace roc {
 namespace node {
 
 ReceiverDecoder::ReceiverDecoder(Context& context,
-                                 const pipeline::ReceiverConfig& pipeline_config)
+                                 const pipeline::ReceiverSourceConfig& pipeline_config)
     : Node(context)
+    , packet_factory_(context.packet_pool(), context.packet_buffer_pool())
     , pipeline_(*this,
                 pipeline_config,
-                context.format_map(),
-                context.packet_factory(),
-                context.byte_buffer_factory(),
-                context.sample_buffer_factory(),
+                context.encoding_map(),
+                context.packet_pool(),
+                context.packet_buffer_pool(),
+                context.frame_buffer_pool(),
                 context.arena())
     , slot_(NULL)
     , processing_task_(pipeline_)
-    , sess_metrics_(context.arena())
     , valid_(false) {
     roc_log(LogDebug, "receiver decoder node: initializing");
 
@@ -36,7 +36,10 @@ ReceiverDecoder::ReceiverDecoder(Context& context,
         return;
     }
 
-    pipeline::ReceiverLoop::Tasks::CreateSlot slot_task;
+    pipeline::ReceiverSlotConfig slot_config;
+    slot_config.enable_routing = false;
+
+    pipeline::ReceiverLoop::Tasks::CreateSlot slot_task(slot_config);
     if (!pipeline_.schedule_and_wait(slot_task)) {
         roc_log(LogError, "receiver decoder node: failed to create slot");
         return;
@@ -71,6 +74,10 @@ bool ReceiverDecoder::is_valid() {
     return valid_;
 }
 
+packet::PacketFactory& ReceiverDecoder::packet_factory() {
+    return packet_factory_;
+}
+
 bool ReceiverDecoder::activate(address::Interface iface, address::Protocol proto) {
     core::Mutex::Lock lock(mutex_);
 
@@ -82,7 +89,7 @@ bool ReceiverDecoder::activate(address::Interface iface, address::Protocol proto
     roc_log(LogInfo, "receiver decoder node: activating %s interface with protocol %s",
             address::interface_to_str(iface), address::proto_to_str(proto));
 
-    if (endpoint_writers_[iface]) {
+    if (endpoint_readers_[iface] || endpoint_writers_[iface]) {
         roc_log(LogError,
                 "receiver decoder node:"
                 " can't activate %s interface: interface already activated",
@@ -90,7 +97,11 @@ bool ReceiverDecoder::activate(address::Interface iface, address::Protocol proto
         return false;
     }
 
-    pipeline::ReceiverLoop::Tasks::AddEndpoint endpoint_task(slot_, iface, proto);
+    endpoint_queues_[iface].reset(new (endpoint_queues_[iface]) packet::ConcurrentQueue(
+        packet::ConcurrentQueue::NonBlocking));
+
+    pipeline::ReceiverLoop::Tasks::AddEndpoint endpoint_task(
+        slot_, iface, proto, bind_address_, endpoint_queues_[iface].get());
     if (!pipeline_.schedule_and_wait(endpoint_task)) {
         roc_log(LogError,
                 "receiver decoder node:"
@@ -99,28 +110,31 @@ bool ReceiverDecoder::activate(address::Interface iface, address::Protocol proto
         return false;
     }
 
-    endpoint_writers_[iface] = endpoint_task.get_writer();
+    if (iface == address::Iface_AudioControl) {
+        endpoint_readers_[iface] = endpoint_queues_[iface].get();
+    }
+    endpoint_writers_[iface] = endpoint_task.get_inbound_writer();
 
     return true;
 }
 
-bool ReceiverDecoder::get_metrics(pipeline::ReceiverSlotMetrics& slot_metrics,
-                                  sess_metrics_func_t sess_metrics_func,
-                                  size_t* sess_metrics_size,
-                                  void* sess_metrics_arg) {
+bool ReceiverDecoder::get_metrics(slot_metrics_func_t slot_metrics_func,
+                                  void* slot_metrics_arg,
+                                  party_metrics_func_t party_metrics_func,
+                                  void* party_metrics_arg) {
     core::Mutex::Lock lock(mutex_);
 
     roc_panic_if_not(is_valid());
 
-    if (!sess_metrics_.resize(*sess_metrics_size)) {
-        roc_log(LogError,
-                "receiver decoder node:"
-                " can't get metrics: can't allocate buffer");
-        return false;
-    }
+    roc_panic_if(!slot_metrics_func);
+    roc_panic_if(!party_metrics_func);
 
-    pipeline::ReceiverLoop::Tasks::QuerySlot task(
-        slot_, slot_metrics, sess_metrics_.data(), sess_metrics_size);
+    pipeline::ReceiverSlotMetrics slot_metrics;
+    pipeline::ReceiverParticipantMetrics party_metrics;
+    size_t party_metrics_size = 1;
+
+    pipeline::ReceiverLoop::Tasks::QuerySlot task(slot_, slot_metrics, &party_metrics,
+                                                  &party_metrics_size);
     if (!pipeline_.schedule_and_wait(task)) {
         roc_log(LogError,
                 "receiver decoder node:"
@@ -128,15 +142,19 @@ bool ReceiverDecoder::get_metrics(pipeline::ReceiverSlotMetrics& slot_metrics,
         return false;
     }
 
-    for (size_t sess_index = 0; sess_index < *sess_metrics_size; sess_index++) {
-        sess_metrics_func(sess_metrics_[sess_index], sess_index, sess_metrics_arg);
+    if (slot_metrics_arg) {
+        slot_metrics_func(slot_metrics, slot_metrics_arg);
+    }
+
+    if (party_metrics_arg) {
+        party_metrics_func(party_metrics, 0, party_metrics_arg);
     }
 
     return true;
 }
 
-status::StatusCode ReceiverDecoder::write(address::Interface iface,
-                                          const packet::PacketPtr& packet) {
+status::StatusCode ReceiverDecoder::write_packet(address::Interface iface,
+                                                 const packet::PacketPtr& packet) {
     roc_panic_if_not(is_valid());
 
     roc_panic_if(iface < 0);
@@ -153,6 +171,35 @@ status::StatusCode ReceiverDecoder::write(address::Interface iface,
     }
 
     return writer->write(packet);
+}
+
+status::StatusCode ReceiverDecoder::read_packet(address::Interface iface,
+                                                packet::PacketPtr& packet) {
+    roc_panic_if_not(is_valid());
+
+    roc_panic_if(iface < 0);
+    roc_panic_if(iface >= (int)address::Iface_Max);
+
+    packet::IReader* reader = endpoint_readers_[iface];
+    if (!reader) {
+        if (!endpoint_writers_[iface]) {
+            roc_log(LogError,
+                    "receiver decoder node:"
+                    " can't read from %s interface: interface not activated",
+                    address::interface_to_str(iface));
+            // TODO(gh-183): return StatusNotFound
+            return status::StatusNoData;
+        } else {
+            roc_log(LogError,
+                    "sender encoder node:"
+                    " can't read from %s interface: interface doesn't support reading",
+                    address::interface_to_str(iface));
+            // TODO(gh-183): return StatusBadOperation
+            return status::StatusNoData;
+        }
+    }
+
+    return reader->read(packet);
 }
 
 sndio::ISource& ReceiverDecoder::source() {

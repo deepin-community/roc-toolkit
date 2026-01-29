@@ -12,14 +12,15 @@
 namespace roc {
 namespace sndio {
 
-Pump::Pump(core::BufferFactory<audio::sample_t>& buffer_factory,
+Pump::Pump(core::IPool& buffer_pool,
            ISource& source,
            ISource* backup_source,
            ISink& sink,
            core::nanoseconds_t frame_length,
            const audio::SampleSpec& sample_spec,
            Mode mode)
-    : main_source_(source)
+    : frame_factory_(buffer_pool)
+    , main_source_(source)
     , backup_source_(backup_source)
     , sink_(sink)
     , sample_spec_(sample_spec)
@@ -32,13 +33,14 @@ Pump::Pump(core::BufferFactory<audio::sample_t>& buffer_factory,
         return;
     }
 
-    if (buffer_factory.buffer_size() < frame_size) {
+    if (frame_factory_.raw_buffer_size() < frame_size) {
         roc_log(LogError, "pump: buffer size is too small: required=%lu actual=%lu",
-                (unsigned long)frame_size, (unsigned long)buffer_factory.buffer_size());
+                (unsigned long)frame_size,
+                (unsigned long)frame_factory_.raw_buffer_size());
         return;
     }
 
-    frame_buffer_ = buffer_factory.new_buffer();
+    frame_buffer_ = frame_factory_.new_raw_buffer();
     if (!frame_buffer_) {
         roc_log(LogError, "pump: can't allocate frame buffer");
         return;
@@ -118,6 +120,12 @@ bool Pump::transfer_frame_(ISource& current_source) {
         return false;
     }
 
+    if (!frame.has_duration()) {
+        // if source does not provide frame duration, we fill it here
+        // we assume that the frame has some PCM format
+        frame.set_duration(sample_spec_.bytes_2_stream_timestamp(frame.num_bytes()));
+    }
+
     if (frame.capture_timestamp() == 0) {
         // if source does not provide capture timestamps, we fill them here
         // we subtract source latency to take into account recording buffer size,
@@ -128,7 +136,7 @@ bool Pump::transfer_frame_(ISource& current_source) {
 
         if (current_source.has_latency()) {
             capture_latency = current_source.latency()
-                + sample_spec_.samples_overall_2_ns(frame.num_samples());
+                + sample_spec_.stream_timestamp_2_ns(frame.duration());
         }
 
         frame.set_capture_timestamp(core::timestamp(core::ClockUnix) - capture_latency);
@@ -147,7 +155,7 @@ bool Pump::transfer_frame_(ISource& current_source) {
 
         if (sink_.has_latency()) {
             playback_latency =
-                sink_.latency() - sample_spec_.samples_overall_2_ns(frame.num_samples());
+                sink_.latency() - sample_spec_.stream_timestamp_2_ns(frame.duration());
         }
 
         current_source.reclock(core::timestamp(core::ClockUnix) + playback_latency);

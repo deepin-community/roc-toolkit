@@ -34,7 +34,7 @@ inline void write_beep(sample_t* buf, size_t bufsz) {
 
 Depacketizer::Depacketizer(packet::IReader& reader,
                            IFrameDecoder& payload_decoder,
-                           const audio::SampleSpec& sample_spec,
+                           const SampleSpec& sample_spec,
                            bool beep)
     : reader_(reader)
     , payload_decoder_(payload_decoder)
@@ -49,8 +49,9 @@ Depacketizer::Depacketizer(packet::IReader& reader,
     , beep_(beep)
     , first_packet_(true)
     , valid_(false) {
-    roc_panic_if_msg(!sample_spec.is_valid(), "depacketizer: invalid sample spec: %s",
-                     sample_spec_to_str(sample_spec).c_str());
+    roc_panic_if_msg(!sample_spec_.is_valid() || !sample_spec_.is_raw(),
+                     "depacketizer: required valid sample spec with raw format: %s",
+                     sample_spec_to_str(sample_spec_).c_str());
 
     roc_log(LogDebug, "depacketizer: initializing: n_channels=%lu",
             (unsigned long)sample_spec_.num_channels());
@@ -82,12 +83,12 @@ bool Depacketizer::read(Frame& frame) {
 }
 
 void Depacketizer::read_frame_(Frame& frame) {
-    if (frame.num_samples() % sample_spec_.num_channels() != 0) {
+    if (frame.num_raw_samples() % sample_spec_.num_channels() != 0) {
         roc_panic("depacketizer: unexpected frame size");
     }
 
-    sample_t* buff_ptr = frame.samples();
-    sample_t* buff_end = frame.samples() + frame.num_samples();
+    sample_t* buff_ptr = frame.raw_samples();
+    sample_t* buff_end = frame.raw_samples() + frame.num_raw_samples();
 
     FrameInfo info;
 
@@ -212,9 +213,8 @@ void Depacketizer::update_packet_(FrameInfo& info) {
     unsigned n_dropped = 0;
 
     while ((packet_ = read_packet_())) {
-        payload_decoder_.begin(packet_->rtp()->stream_timestamp,
-                               packet_->rtp()->payload.data(),
-                               packet_->rtp()->payload.size());
+        payload_decoder_.begin(packet_->stream_timestamp(), packet_->payload().data(),
+                               packet_->payload().size());
 
         pkt_timestamp = payload_decoder_.position();
 
@@ -248,7 +248,7 @@ void Depacketizer::update_packet_(FrameInfo& info) {
         return;
     }
 
-    next_capture_ts_ = packet_->rtp()->capture_timestamp;
+    next_capture_ts_ = packet_->capture_timestamp();
     if (!valid_capture_ts_ && !!next_capture_ts_) {
         valid_capture_ts_ = true;
     }
@@ -281,16 +281,12 @@ packet::PacketPtr Depacketizer::read_packet_() {
     const status::StatusCode code = reader_.read(pp);
     if (code != status::StatusOK) {
         if (code != status::StatusNoData) {
-            // TODO: forward status (gh-302)
+            // TODO(gh-302): forward status
             roc_log(LogError, "depacketizer: failed to read packet: status=%s",
                     status::code_to_str(code));
         }
 
         return NULL;
-    }
-
-    if (!pp->rtp()) {
-        roc_panic("depacketizer: unexpected non-rtp packet");
     }
 
     return pp;
@@ -300,18 +296,19 @@ void Depacketizer::set_frame_props_(Frame& frame, const FrameInfo& info) {
     unsigned flags = 0;
 
     if (info.n_decoded_samples != 0) {
-        flags |= Frame::FlagNonblank;
+        flags |= Frame::FlagNotBlank;
     }
 
-    if (info.n_decoded_samples < frame.num_samples()) {
-        flags |= Frame::FlagIncomplete;
+    if (info.n_decoded_samples < frame.num_raw_samples()) {
+        flags |= Frame::FlagNotComplete;
     }
 
     if (info.n_dropped_packets != 0) {
-        flags |= Frame::FlagDrops;
+        flags |= Frame::FlagPacketDrops;
     }
 
     frame.set_flags(flags);
+    frame.set_duration(frame.num_raw_samples() / sample_spec_.num_channels());
 
     if (info.capture_ts > 0) {
         // do not produce negative cts, which may happen when first packet was in

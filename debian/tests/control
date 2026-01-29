@@ -1,0 +1,10 @@
+Test-Command: for t in /usr/libexec/roc-toolkit/roc-test-*; do echo $t; $t; done
+Depends: roc-toolkit-tests
+Architecture: !s390x
+
+Test-Command: for t in /usr/libexec/roc-toolkit/roc-test-*; do echo $t; $t; done
+Depends: roc-toolkit-tests
+Architecture: s390x
+Restrictions: flaky
+# Mark tests as flaky on s390x because of new tests are failing, see
+# https://github.com/roc-streaming/roc-toolkit/issues/744

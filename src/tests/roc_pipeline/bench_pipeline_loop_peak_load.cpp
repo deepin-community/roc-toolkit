@@ -32,7 +32,7 @@ namespace {
 //  2. frame computation is heavy and is also a few milliseconds
 //  3. task computation time is a few microseconds
 //  4. there is a load peak currently and tasks are scheduled frequently
-//  5. tasks are comming in bursts, a few tasks in a burst each millisecond
+//  5. tasks are coming in bursts, a few tasks in a burst each millisecond
 //
 // This is not the most common use case. Usually, pipeline tasks are scheduled
 // relatively rarely. However, we want to test this specific case to ensure
@@ -52,12 +52,12 @@ namespace {
 //
 // The second benchmark demonstrates that without precise task scheduling enabled,
 // frame processing delays (fb_avg, fb_p95) and thread preemptions (pr) grow
-// in a linar direction with the rate of incoming tasks (try to increase MaxTaskBurst
-// or decreate MaxTaskDelay).
+// in a linear direction with the rate of incoming tasks (try to increase MaxTaskBurst
+// or decrease MaxTaskDelay).
 //
 // The third benchmark uses the default pipeline mode, demonstrating that with the
 // precise task scheduling enabled:
-//  - frame processing delays are independnt on the task rate
+//  - frame processing delays are independent on the task rate
 //  - delay before frame processing (fb_avg, fb_p95) is almost not affected
 //  - delay after frame processing (fa_avg, fa_p95) is increased, but in a controllable
 //    way, i.e. by config.max_inframe_task_processing plus average duration of one task
@@ -108,7 +108,7 @@ enum {
 // computation time of a frame
 const core::nanoseconds_t FrameProcessingDuration = 3 * core::Millisecond;
 
-// computation time of a taks
+// computation time of a task
 const core::nanoseconds_t MinTaskProcessingDuration = 5 * core::Microsecond;
 const core::nanoseconds_t MaxTaskProcessingDuration = 15 * core::Microsecond;
 
@@ -267,14 +267,16 @@ public:
         core::nanoseconds_t start_time_;
     };
 
-    TestPipeline(const TaskConfig& config,
+    TestPipeline(const PipelineLoopConfig& config,
                  ctl::ControlTaskQueue& control_queue,
                  DelayStats& stats)
-        : PipelineLoop(
-            *this,
-            config,
-            audio::SampleSpec(
-                SampleRate, audio::ChanLayout_Surround, audio::ChanOrder_Smpte, Chans))
+        : PipelineLoop(*this,
+                       config,
+                       audio::SampleSpec(SampleRate,
+                                         audio::Sample_RawFormat,
+                                         audio::ChanLayout_Surround,
+                                         audio::ChanOrder_Smpte,
+                                         Chans))
         , stats_(stats)
         , control_queue_(control_queue)
         , control_task_(*this) {
@@ -426,7 +428,7 @@ public:
 
             stats_.frame_finished();
 
-            ts += frame.num_samples();
+            ts += frame.num_raw_samples();
         }
     }
 
@@ -441,7 +443,7 @@ void BM_PipelinePeakLoad_NoTasks(benchmark::State& state) {
 
     DelayStats stats;
 
-    TaskConfig config;
+    PipelineLoopConfig config;
     TestPipeline pipeline(config, control_queue, stats);
 
     FrameWriter frame_wr(pipeline, stats, state);
@@ -462,7 +464,7 @@ void BM_PipelinePeakLoad_PreciseSchedOff(benchmark::State& state) {
 
     DelayStats stats;
 
-    TaskConfig config;
+    PipelineLoopConfig config;
     config.enable_precise_task_scheduling = false;
 
     TestPipeline pipeline(config, control_queue, stats);
@@ -492,7 +494,7 @@ void BM_PipelinePeakLoad_PreciseSchedOn(benchmark::State& state) {
 
     DelayStats stats;
 
-    TaskConfig config;
+    PipelineLoopConfig config;
     config.enable_precise_task_scheduling = true;
 
     TestPipeline pipeline(config, control_queue, stats);

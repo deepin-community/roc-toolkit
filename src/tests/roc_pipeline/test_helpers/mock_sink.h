@@ -29,6 +29,14 @@ public:
         , n_chans_(sample_spec.num_channels()) {
     }
 
+    virtual sndio::ISink* to_sink() {
+        return this;
+    }
+
+    virtual sndio::ISource* to_source() {
+        return NULL;
+    }
+
     virtual sndio::DeviceType type() const {
         return sndio::DeviceType_Sink;
     }
@@ -68,11 +76,11 @@ public:
     }
 
     virtual void write(audio::Frame& frame) {
-        CHECK(frame.num_samples() % n_chans_ == 0);
+        CHECK(frame.num_raw_samples() % n_chans_ == 0);
 
-        for (size_t ns = 0; ns < frame.num_samples() / n_chans_; ns++) {
+        for (size_t ns = 0; ns < frame.num_raw_samples() / n_chans_; ns++) {
             for (size_t nc = 0; nc < n_chans_; nc++) {
-                DOUBLES_EQUAL((double)frame.samples()[ns * n_chans_ + nc],
+                DOUBLES_EQUAL((double)frame.raw_samples()[ns * n_chans_ + nc],
                               (double)nth_sample(off_), SampleEpsilon);
                 n_samples_++;
             }

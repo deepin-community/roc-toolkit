@@ -12,14 +12,12 @@
 namespace roc {
 namespace audio {
 
-IFrameEncoder* PcmEncoder::construct(core::IArena& arena,
-                                     const PcmFormat& pcm_format,
-                                     const SampleSpec& sample_spec) {
-    return new (arena) PcmEncoder(pcm_format, sample_spec);
+IFrameEncoder* PcmEncoder::construct(core::IArena& arena, const SampleSpec& sample_spec) {
+    return new (arena) PcmEncoder(sample_spec);
 }
 
-PcmEncoder::PcmEncoder(const PcmFormat& pcm_format, const SampleSpec& sample_spec)
-    : pcm_mapper_(SampleFormat, pcm_format)
+PcmEncoder::PcmEncoder(const SampleSpec& sample_spec)
+    : pcm_mapper_(Sample_RawFormat, sample_spec.pcm_format())
     , n_chans_(sample_spec.num_channels())
     , frame_data_(NULL)
     , frame_byte_size_(0)
@@ -41,7 +39,7 @@ void PcmEncoder::begin(void* frame_data, size_t frame_size) {
     frame_byte_size_ = frame_size;
 }
 
-size_t PcmEncoder::write(const audio::sample_t* samples, size_t n_samples) {
+size_t PcmEncoder::write(const sample_t* samples, size_t n_samples) {
     if (!frame_data_) {
         roc_panic("pcm encoder: write should be called only between begin/end");
     }

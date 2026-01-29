@@ -8,7 +8,6 @@
 
 #include <CppUTest/TestHarness.h>
 
-#include "roc_core/buffer_factory.h"
 #include "roc_core/heap_arena.h"
 #include "roc_packet/packet_factory.h"
 #include "roc_packet/queue.h"
@@ -20,9 +19,28 @@ namespace packet {
 
 namespace {
 
-class StatusWriter : public IWriter, public core::NonCopyable<> {
+enum { PacketSz = 128 };
+
+core::HeapArena arena;
+PacketFactory packet_factory(arena, PacketSz);
+
+PacketPtr new_packet() {
+    PacketPtr packet = packet_factory.new_packet();
+    CHECK(packet);
+
+    packet->add_flags(Packet::FlagRTP | Packet::FlagPrepared);
+    packet->rtp()->payload_type = rtp::PayloadType_L16_Stereo;
+
+    core::Slice<uint8_t> buffer = packet_factory.new_packet_buffer();
+    CHECK(buffer);
+    packet->rtp()->payload = buffer;
+
+    return packet;
+}
+
+class MockWriter : public IWriter, public core::NonCopyable<> {
 public:
-    explicit StatusWriter(status::StatusCode code)
+    explicit MockWriter(status::StatusCode code)
         : code_(code) {
     }
 
@@ -34,8 +52,8 @@ private:
     status::StatusCode code_;
 };
 
-struct TestComposer : public IComposer, public core::NonCopyable<> {
-    TestComposer()
+struct MockComposer : public IComposer, public core::NonCopyable<> {
+    MockComposer()
         : compose_call_count(0) {
     }
 
@@ -59,27 +77,6 @@ struct TestComposer : public IComposer, public core::NonCopyable<> {
     unsigned compose_call_count;
 };
 
-PacketPtr new_packet(PacketFactory& packet_factory,
-                     core::BufferFactory<uint8_t>& buffer_factory) {
-    PacketPtr packet = packet_factory.new_packet();
-    CHECK(packet);
-
-    packet->add_flags(Packet::FlagRTP | Packet::FlagPrepared);
-    packet->rtp()->payload_type = rtp::PayloadType_L16_Stereo;
-
-    core::Slice<uint8_t> buffer = buffer_factory.new_buffer();
-    CHECK(buffer);
-    packet->rtp()->payload = buffer;
-
-    return packet;
-}
-
-enum { PacketSz = 128 };
-
-core::HeapArena arena;
-PacketFactory packet_factory(arena);
-core::BufferFactory<uint8_t> buffer_factory(arena, PacketSz);
-
 } // namespace
 
 TEST_GROUP(shipper) {};
@@ -87,110 +84,108 @@ TEST_GROUP(shipper) {};
 TEST(shipper, forward_write_status) {
     const status::StatusCode codes[] = {
         status::StatusOK,
-        status::StatusUnknown,
-        status::StatusNoData,
+        status::StatusNoMem,
     };
 
     for (size_t n = 0; n < ROC_ARRAY_SIZE(codes); ++n) {
-        address::SocketAddr addr;
-        TestComposer composer;
-        StatusWriter writer(codes[n]);
+        address::SocketAddr address;
+        MockComposer composer;
+        MockWriter writer(codes[n]);
 
-        Shipper shipper(addr, composer, writer);
+        Shipper shipper(composer, writer, &address);
 
-        PacketPtr pp = new_packet(packet_factory, buffer_factory);
-        UNSIGNED_LONGS_EQUAL(codes[n], shipper.write(pp));
+        PacketPtr pp = new_packet();
+        LONGS_EQUAL(codes[n], shipper.write(pp));
     }
 }
 
-TEST(shipper, without_host_port) {
-    address::SocketAddr addr;
-    TestComposer composer;
+TEST(shipper, without_address) {
+    MockComposer composer;
     Queue queue;
 
-    Shipper shipper(addr, composer, queue);
+    Shipper shipper(composer, queue, NULL);
 
-    PacketPtr wp = new_packet(packet_factory, buffer_factory);
+    PacketPtr wp = new_packet();
 
     CHECK((wp->flags() & Packet::FlagUDP) == 0);
     CHECK(!wp->udp());
 
-    UNSIGNED_LONGS_EQUAL(status::StatusOK, shipper.write(wp));
+    LONGS_EQUAL(status::StatusOK, shipper.write(wp));
 
     CHECK((wp->flags() & Packet::FlagUDP) == 0);
     CHECK(!wp->udp());
 
     packet::PacketPtr rp;
-    UNSIGNED_LONGS_EQUAL(status::StatusOK, queue.read(rp));
+    LONGS_EQUAL(status::StatusOK, queue.read(rp));
     CHECK(wp == rp);
 }
 
-TEST(shipper, with_host_port) {
-    address::SocketAddr addr;
-    CHECK(addr.set_host_port_auto("127.0.0.1", 0));
+TEST(shipper, with_address) {
+    address::SocketAddr address;
+    CHECK(address.set_host_port_auto("127.0.0.1", 123));
 
-    TestComposer composer;
+    MockComposer composer;
     Queue queue;
 
-    Shipper shipper(addr, composer, queue);
+    Shipper shipper(composer, queue, &address);
 
-    PacketPtr wp = new_packet(packet_factory, buffer_factory);
+    PacketPtr wp = new_packet();
 
     CHECK((wp->flags() & Packet::FlagUDP) == 0);
     CHECK(!wp->udp());
 
-    UNSIGNED_LONGS_EQUAL(status::StatusOK, shipper.write(wp));
+    LONGS_EQUAL(status::StatusOK, shipper.write(wp));
 
     CHECK(wp->flags() & Packet::FlagUDP);
-    CHECK(addr == wp->udp()->dst_addr);
+    CHECK(address == wp->udp()->dst_addr);
 
     packet::PacketPtr rp;
-    UNSIGNED_LONGS_EQUAL(status::StatusOK, queue.read(rp));
+    LONGS_EQUAL(status::StatusOK, queue.read(rp));
     CHECK(wp == rp);
 }
 
 TEST(shipper, packet_already_composed) {
-    address::SocketAddr addr;
-    TestComposer composer;
+    address::SocketAddr address;
+    MockComposer composer;
     Queue queue;
 
-    Shipper shipper(addr, composer, queue);
+    Shipper shipper(composer, queue, &address);
 
-    PacketPtr wp = new_packet(packet_factory, buffer_factory);
+    PacketPtr wp = new_packet();
     wp->add_flags(Packet::FlagComposed);
 
     CHECK(wp->flags() & Packet::FlagComposed);
-    UNSIGNED_LONGS_EQUAL(0, composer.compose_call_count);
+    LONGS_EQUAL(0, composer.compose_call_count);
 
-    UNSIGNED_LONGS_EQUAL(status::StatusOK, shipper.write(wp));
+    LONGS_EQUAL(status::StatusOK, shipper.write(wp));
 
     CHECK(wp->flags() & Packet::FlagComposed);
-    UNSIGNED_LONGS_EQUAL(0, composer.compose_call_count);
+    LONGS_EQUAL(0, composer.compose_call_count);
 
     packet::PacketPtr rp;
-    UNSIGNED_LONGS_EQUAL(status::StatusOK, queue.read(rp));
+    LONGS_EQUAL(status::StatusOK, queue.read(rp));
     CHECK(wp == rp);
 }
 
 TEST(shipper, packet_not_composed) {
-    address::SocketAddr addr;
-    TestComposer composer;
+    address::SocketAddr address;
+    MockComposer composer;
     Queue queue;
 
-    Shipper shipper(addr, composer, queue);
+    Shipper shipper(composer, queue, &address);
 
-    PacketPtr wp = new_packet(packet_factory, buffer_factory);
+    PacketPtr wp = new_packet();
 
     CHECK((wp->flags() & Packet::FlagComposed) == 0);
-    UNSIGNED_LONGS_EQUAL(0, composer.compose_call_count);
+    LONGS_EQUAL(0, composer.compose_call_count);
 
-    UNSIGNED_LONGS_EQUAL(status::StatusOK, shipper.write(wp));
+    LONGS_EQUAL(status::StatusOK, shipper.write(wp));
 
-    UNSIGNED_LONGS_EQUAL(1, composer.compose_call_count);
+    LONGS_EQUAL(1, composer.compose_call_count);
     CHECK(wp->flags() & Packet::FlagComposed);
 
     packet::PacketPtr rp;
-    UNSIGNED_LONGS_EQUAL(status::StatusOK, queue.read(rp));
+    LONGS_EQUAL(status::StatusOK, queue.read(rp));
     CHECK(wp == rp);
 }
 

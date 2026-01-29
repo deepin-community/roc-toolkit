@@ -10,54 +10,72 @@
 #include "roc_audio/resampler_map.h"
 #include "roc_core/log.h"
 #include "roc_core/panic.h"
-#include "roc_core/stddefs.h"
-#include "roc_sndio/device_state.h"
 
 namespace roc {
 namespace pipeline {
 
-SenderSink::SenderSink(const SenderConfig& config,
-                       const rtp::FormatMap& format_map,
-                       packet::PacketFactory& packet_factory,
-                       core::BufferFactory<uint8_t>& byte_buffer_factory,
-                       core::BufferFactory<audio::sample_t>& sample_buffer_factory,
+SenderSink::SenderSink(const SenderSinkConfig& sink_config,
+                       const rtp::EncodingMap& encoding_map,
+                       core::IPool& packet_pool,
+                       core::IPool& packet_buffer_pool,
+                       core::IPool& frame_buffer_pool,
                        core::IArena& arena)
-    : config_(config)
-    , format_map_(format_map)
-    , packet_factory_(packet_factory)
-    , byte_buffer_factory_(byte_buffer_factory)
-    , sample_buffer_factory_(sample_buffer_factory)
+    : sink_config_(sink_config)
+    , encoding_map_(encoding_map)
+    , packet_factory_(packet_pool, packet_buffer_pool)
+    , frame_factory_(frame_buffer_pool)
     , arena_(arena)
-    , audio_writer_(NULL) {
-    audio::IFrameWriter* awriter = &fanout_;
+    , frame_writer_(NULL)
+    , valid_(false) {
+    sink_config_.deduce_defaults();
 
-    if (config_.enable_profiling) {
+    audio::IFrameWriter* frm_writer = &fanout_;
+
+    if (!sink_config_.input_sample_spec.is_raw()) {
+        const audio::SampleSpec out_spec(sink_config_.input_sample_spec.sample_rate(),
+                                         audio::Sample_RawFormat,
+                                         sink_config_.input_sample_spec.channel_set());
+
+        pcm_mapper_.reset(new (pcm_mapper_) audio::PcmMapperWriter(
+            *frm_writer, frame_factory_, sink_config_.input_sample_spec, out_spec));
+        if (!pcm_mapper_ || !pcm_mapper_->is_valid()) {
+            return;
+        }
+        frm_writer = pcm_mapper_.get();
+    }
+
+    if (sink_config_.enable_profiling) {
         profiler_.reset(new (profiler_) audio::ProfilingWriter(
-            *awriter, arena, config_.input_sample_spec, config_.profiler_config));
+            *frm_writer, arena, sink_config_.input_sample_spec, sink_config_.profiler));
         if (!profiler_ || !profiler_->is_valid()) {
             return;
         }
-        awriter = profiler_.get();
+        frm_writer = profiler_.get();
     }
 
-    audio_writer_ = awriter;
+    if (!frm_writer) {
+        return;
+    }
+
+    frame_writer_ = frm_writer;
+    valid_ = true;
 }
 
 bool SenderSink::is_valid() const {
-    return audio_writer_;
+    return valid_;
 }
 
-SenderSlot* SenderSink::create_slot() {
+SenderSlot* SenderSink::create_slot(const SenderSlotConfig& slot_config) {
     roc_panic_if(!is_valid());
 
     roc_log(LogInfo, "sender sink: adding slot");
 
     core::SharedPtr<SenderSlot> slot =
-        new (arena_) SenderSlot(config_, format_map_, fanout_, packet_factory_,
-                                byte_buffer_factory_, sample_buffer_factory_, arena_);
+        new (arena_) SenderSlot(sink_config_, slot_config, state_tracker_, encoding_map_,
+                                fanout_, packet_factory_, frame_factory_, arena_);
 
-    if (!slot) {
-        roc_log(LogError, "sender sink: can't allocate slot");
+    if (!slot || !slot->is_valid()) {
+        roc_log(LogError, "sender sink: can't create slot");
         return NULL;
     }
 
@@ -74,7 +92,20 @@ void SenderSink::delete_slot(SenderSlot* slot) {
     slots_.remove(*slot);
 }
 
+size_t SenderSink::num_sessions() const {
+    roc_panic_if(!is_valid());
+
+    return state_tracker_.num_active_sessions();
+}
+
 core::nanoseconds_t SenderSink::refresh(core::nanoseconds_t current_time) {
+    roc_panic_if(!is_valid());
+
+    roc_panic_if_msg(current_time <= 0,
+                     "sender sink: invalid timestamp:"
+                     " expected positive value, got %lld",
+                     (long long)current_time);
+
     core::nanoseconds_t next_deadline = 0;
 
     for (core::SharedPtr<SenderSlot> slot = slots_.front(); slot;
@@ -93,12 +124,20 @@ core::nanoseconds_t SenderSink::refresh(core::nanoseconds_t current_time) {
     return next_deadline;
 }
 
+sndio::ISink* SenderSink::to_sink() {
+    return this;
+}
+
+sndio::ISource* SenderSink::to_source() {
+    return NULL;
+}
+
 sndio::DeviceType SenderSink::type() const {
     return sndio::DeviceType_Sink;
 }
 
 sndio::DeviceState SenderSink::state() const {
-    return sndio::DeviceState_Active;
+    return state_tracker_.get_state();
 }
 
 void SenderSink::pause() {
@@ -114,7 +153,7 @@ bool SenderSink::restart() {
 }
 
 audio::SampleSpec SenderSink::sample_spec() const {
-    return config_.input_sample_spec;
+    return sink_config_.input_sample_spec;
 }
 
 core::nanoseconds_t SenderSink::latency() const {
@@ -126,13 +165,13 @@ bool SenderSink::has_latency() const {
 }
 
 bool SenderSink::has_clock() const {
-    return config_.enable_timing;
+    return sink_config_.enable_timing;
 }
 
 void SenderSink::write(audio::Frame& frame) {
     roc_panic_if(!is_valid());
 
-    audio_writer_->write(frame);
+    frame_writer_->write(frame);
 }
 
 } // namespace pipeline
